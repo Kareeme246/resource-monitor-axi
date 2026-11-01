@@ -28,7 +28,8 @@ Darwin)
     b == "launchd_sim" { sims++ }
     b == "xcodebuild" { xcb++ }
     END { print "sims=" sims + 0; print "xcodebuild=" xcb + 0 }'
-  echo "cpu=$(top -l 2 -n 0 -s 1 2>/dev/null | awk '/^CPU usage/ {v = $3 + $5} END {print v}')"
+  # iostat's second line covers the one second window; its first is since boot.
+  echo "cpu=$(iostat -n0 -c 2 -w 1 2>/dev/null | awk '$1 ~ /^[0-9]+$/ && NF >= 3 {v = 100 - $3} END {if (v != "") print v}')"
   ;;
 Linux)
   echo "cores=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null)"

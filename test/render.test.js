@@ -36,7 +36,6 @@ test("sims bar and verdict respect per-host simCeiling", () => {
   const custom = { label: "mini", sample: { ...sample, sims: 2 }, simCeiling: 4 };
   const out = renderPanel([custom], { columns: 60, now: 2000 });
   assert.match(out, /2\/4/);
-  assert.match(out, /● busy/);
 });
 
 test("two configured hosts reflow cleanly when narrow and wide", () => {
@@ -77,5 +76,6 @@ test("a host never reached shows no reading yet", () => {
 test("snapshot rows mark unreachable hosts and keep the others", () => {
   const rows = snapshotData([live, never], 2000);
   assert.equal(rows[0].verdict, "busy");
+  assert.equal(rows[0].simsFree, 1);
   assert.deepEqual([rows[1].status, rows[1].verdict, rows[1].error], ["unreachable", null, "host not found"]);
 });

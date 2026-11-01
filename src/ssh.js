@@ -8,6 +8,11 @@ import { REMOTE_SCRIPT } from "./remote-script.js";
 const CONTROL_DIR = `/tmp/resource-monitor-axi-${process.getuid?.() ?? "u"}`;
 const CONNECT_TIMEOUT_S = 5;
 const HARD_TIMEOUT_MS = 15_000;
+/**
+ * The master belongs to this process. Sharing one between runs would let any
+ * one-shot that exits close the connection a running panel is sampling over.
+ */
+const controlPath = () => join(CONTROL_DIR, `%C-${process.pid}`);
 
 export function sshArgs(host, { reuse = true, sshConfig = process.env.RESOURCE_MONITOR_AXI_SSH_CONFIG } = {}) {
   const args = [];
@@ -24,7 +29,7 @@ export function sshArgs(host, { reuse = true, sshConfig = process.env.RESOURCE_M
     // %C hashes host, port and user, so one master serves every tick.
     args.push(
       "-o", "ControlMaster=auto",
-      "-o", `ControlPath=${join(CONTROL_DIR, "%C")}`,
+      "-o", `ControlPath=${controlPath()}`,
       "-o", "ControlPersist=120",
     );
   }
@@ -41,7 +46,7 @@ export async function closeConnections(hosts, options = {}) {
         new Promise((resolve) => {
           const args = [
             ...(config ? ["-F", config] : []),
-            "-o", `ControlPath=${join(CONTROL_DIR, "%C")}`,
+            "-o", `ControlPath=${controlPath()}`,
             "-O", "exit",
             host,
           ];
@@ -53,8 +58,22 @@ export async function closeConnections(hosts, options = {}) {
   );
 }
 
+/**
+ * One sample. A connection that drops without saying why, as when a reused
+ * master dies mid-sample, gets one fresh try, so a blip never reads as a host
+ * going away. A reason ssh does give is final: retrying would only add its wait.
+ */
+export async function sampleHost(host, options = {}) {
+  try {
+    return await sampleOnce(host, options);
+  } catch (error) {
+    if (error.message !== CONNECTION_LOST) throw error;
+    return sampleOnce(host, options);
+  }
+}
+
 /** One ssh round trip; resolves to a sample or rejects with a short reason. */
-export function sampleHost(host, options = {}) {
+function sampleOnce(host, options) {
   return new Promise((resolve, reject) => {
     const child = spawn("ssh", sshArgs(host, options), { stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
@@ -83,6 +102,8 @@ export function sampleHost(host, options = {}) {
   });
 }
 
+const CONNECTION_LOST = "connection lost";
+
 /** Boil ssh's stderr down to one line a card can show. */
 export function shortReason(stderr, code) {
   const line = stderr
@@ -90,7 +111,7 @@ export function shortReason(stderr, code) {
     .map((l) => l.trim())
     .filter(Boolean)
     .pop();
-  if (!line) return `ssh exited ${code}`;
+  if (!line) return code === 255 ? CONNECTION_LOST : `ssh exited ${code}`;
   const lower = line.toLowerCase();
   if (lower.includes("timed out")) return "connection timed out";
   if (lower.includes("refused")) return "connection refused";
@@ -98,5 +119,6 @@ export function shortReason(stderr, code) {
   if (lower.includes("no route")) return "no route to host";
   if (lower.includes("permission denied")) return "ssh auth failed";
   if (lower.includes("host key")) return "host key problem";
+  if (lower.includes("broken pipe") || lower.includes("closed by") || lower.includes("reset by") || lower.includes("not responding")) return CONNECTION_LOST;
   return line.replace(/^ssh: /, "").slice(0, 60);
 }

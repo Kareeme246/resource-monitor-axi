@@ -1,31 +1,32 @@
 # resource-monitor-axi
 
-A narrow live terminal panel that shows how hard remote machines are working and
-whether they have spare capacity. It is built to run in a second terminal,
-stacked above or below [quota-axi](https://github.com/kunchenguid/quota-axi), and
-borrows its look: rounded text boxes, thin `━` bars with the percent on the
-right, muted labels, a dim status header.
+An agent-first CLI, following [AXI](https://axi.md/), that reports how hard remote
+machines are working and whether they have spare capacity. Its `--tui` is a narrow
+live panel for people, built to run in a second terminal, stacked above or below [quota-axi](https://github.com/kunchenguid/quota-axi), and
+borrows its look: rounded text boxes, muted labels, a dim status header.
 
 ```
-  resource-monitor-axi · 00:58 · 15s · 0 free · 1 busy · 0 saturated · 0 stale
+  resource-monitor-axi · 15s · 1h · v cards
+  0 free · 1 busy · 0 saturated · 0 stale
 
-╭─ ● build-box.local ──────────────────── M5 Mac ─╮
+● build-box.local · M5 Mac
+╭─ cpu ─────────────────────────────────── 16% ─╮
+│    ▃▇▅▃████▃▁▂▂▆▃███   ▁       ██▂    ███     │
+│   ▁█████████████████▅▄▄█▆▅▅  ▁ ███▆▃  ███▇▄   │
+│ ▃▄█████████████████████████▅▇█▇█████▇▆█████▃▄ │
+╰─ 1h ────────────────────────────── peak 100% ─╯
+╭─ memory ───────────────────────── 33% normal ─╮
 │                                               │
-│   cpu     ━━━━━━━━━━━━━━──────  67%           │
-│   memory  ━━━━────────────────  19% normal    │
-│   gpu     ────────────────────   0%           │
-│   disk    ━━━━━━━━━───────────  45% 254G free │
-│   load 5m ━━━━━━━━━━━━━━━━━━━━ 2.7x 27/10c    │
-│   sims    ━━━━━━━━━━──────────  1/2           │
-│   xcode   1 xcodebuild                        │
-│                                               │
-│   ● busy  1 sim · 1 xcodebuild · cpu 67%      │
-│                                               │
-╰───────────────────────────────────────────────╯
+│           ▂▁▁▁▂▂▂▁▁▁▁▁▁▁▂▂▂▁▂▁▁ ▁▁▁▁   ▁▁▁ ▁  │
+│ ▆▆▆▇▇▇▇▇▇████████████████████████████████████ │
+╰─ 1h ─────────────────────────────── peak 41% ─╯
+● busy  1 sim · 1 xcodebuild
+load 5.4x  sims 1/2  xcodebuild 1
 ```
 
-Each card ends with a plain verdict: `free`, `busy` or `saturated`. On a Mac the
-free verdict also says how many more simulators fit ("room for 2 more sims").
+Each host states a plain verdict on how loaded it is: `free`, `busy` or `saturated`,
+from its CPU and GPU. Whether another simulator fits is a separate number: `simsFree`
+in the snapshot, `sims 1/2` in the panel.
 
 ## Use
 
@@ -33,52 +34,89 @@ free verdict also says how many more simulators fit ("room for 2 more sims").
 pnpm install
 pnpm add -g .               # puts resource-monitor-axi on PATH (or run bin/resource-monitor-axi.js)
 
-resource-monitor-axi                 # TOON snapshot, one row per host (agent mode)
-resource-monitor-axi --json          # same data as JSON
-resource-monitor-axi --watch         # live card panel, q quits
-resource-monitor-axi --watch --once  # print one panel frame and exit
-resource-monitor-axi init            # write a starter config
+resource-monitor-axi                       # TOON snapshot, one row per host (agent mode)
+resource-monitor-axi --fields host,cpuPct  # choose the columns (--full for all)
+resource-monitor-axi --json                # every field as JSON
+resource-monitor-axi --tui                 # live charts, for people
+resource-monitor-axi --tui --view cards    # start on the summary cards
+resource-monitor-axi --tui --once          # print one frame and exit
+resource-monitor-axi init                  # write a starter config
+resource-monitor-axi update                # upgrade from npm (--check only reports)
 ```
 
-Flags: `--interval <seconds>`, `--theme light|dark`, `--config <file>`.
-`NO_COLOR`, `TERM=dumb` and piped output turn colour off, leaving the plain
-glyph skeleton. `RESOURCE_MONITOR_AXI_SSH_CONFIG=<file>` points ssh at another
-config file.
+The snapshot leads with `count`, a `summary` such as `0 free, 1 busy, 0 saturated,
+0 unreachable` and the total `simsFree`. Rows default to `host,verdict,simsFree,reason`.
+Unreachable hosts are listed apart with their reason and never stop the others. Errors
+are structured, on stdout: exit 1 for a failure, exit 2 for a bad command or flag. Nothing
+ever prompts, and `--tui` without a terminal fails instead of hanging.
+
+Flags for `--tui`: `--view charts|cards`, `--interval <seconds>`, `--theme light|dark`,
+`--once`. They fail without `--tui`. `--config <file>` works everywhere. `NO_COLOR`,
+`TERM=dumb` and piped output turn colour off, leaving the plain glyph skeleton.
+`RESOURCE_MONITOR_AXI_SSH_CONFIG=<file>` points ssh at another config file.
+
+The panel shows this key along its bottom, including what `w` and `i` change to next.
+They last until you quit; to change what it opens with, use the config.
+
+| Key | Does |
+| --- | --- |
+| `v` | switch between charts and cards |
+| `w` | cycle the chart window: 15m, 1h, 6h, 24h |
+| `i` | cycle the sample interval: 3, 5, 15, 30, 60 s |
+| `j` `k`, arrows | scroll a line |
+| space, page keys | scroll a page |
+| `g` `G`, home, end | top and bottom |
+| `q` | quit |
 
 ### Config
 
 `~/.config/resource-monitor-axi/config.json` (or `$XDG_CONFIG_HOME`, or
 `RESOURCE_MONITOR_AXI_CONFIG`). Without a file the host list is `build-box.local`.
+`resource-monitor-axi init` writes a starter file, and
+[`config.example.json`](config.example.json) shows every setting. The file is read at
+start, so restart the panel after editing it.
 
 ```json
 {
   "hosts": [
-    "build-box.local",
-    { "host": "mini", "label": "Mac mini", "simCeiling": 2 }
+    "my-mac",
+    { "host": "build-box", "label": "Build box", "simCeiling": 4 },
+    "linux-server"
   ],
-  "interval": 15
+  "interval": 15,
+  "window": "1h"
 }
 ```
 
 Hosts are `~/.ssh/config` aliases, so keys, users, jump hosts and ports are
 whatever ssh already knows. Each entry is an alias string or `{host, label, simCeiling}`;
-`label` changes the card title and `simCeiling` sets the simulator ceiling for that
+`label` changes the title and `simCeiling` sets the simulator ceiling for that
 host (default 2). `interval` is the seconds between samples of each host: default 15,
-minimum 5. Hosts are sampled independently, a host is never polled before its interval
+minimum 3. `window` is the chart span the panel opens on: `15m`, `1h` (default), `6h`
+or `24h`. Hosts are sampled independently, a host is never polled before its interval
 has passed, and a slow host does not delay the others.
+
+### History
+
+`--tui` keeps 24 hours of readings per host in one small file under
+`~/.local/state/resource-monitor-axi/` (or `$XDG_STATE_HOME`), about 1 MB at the
+default interval, so charts come back at once after a restart. Time the panel was
+off stays visibly empty and is named on the box's bottom edge. Nothing is written
+to the hosts, and the agent snapshot neither reads nor writes these files.
 
 ## What it measures
 
 One POSIX `sh` script is piped to `sh -s` over ssh. Nothing is installed on the
 host, no daemon runs there, and nothing needs sudo. ssh connections are reused
-through a per-host `ControlMaster` socket in `/tmp/resource-monitor-axi-<uid>`,
-and the masters are closed again when the panel quits. A sample takes about
+through a `ControlMaster` socket per host and per run in `/tmp/resource-monitor-axi-<uid>`,
+so one run exiting cannot disturb another, and each run closes its own when it ends. A
+connection that drops without a reason gets one fresh try before a host reads as away. A sample takes about
 1.3 s of wall time, almost all of it the one second CPU window, and is a handful
 of cheap read-only commands.
 
 | Metric | macOS | Linux |
 | --- | --- | --- |
-| cpu | `top -l 2 -s 1` (second sample) | two `/proc/stat` reads one second apart |
+| cpu | `iostat -c 2 -w 1` (second line, whole numbers) | two `/proc/stat` reads one second apart |
 | memory | `memory_pressure` free %, `kern.memorystatus_vm_pressure_level` | `MemAvailable`, `/proc/pressure/memory` when present |
 | load | `vm.loadavg` | `/proc/loadavg` |
 | disk | `df` on the Data volume | `df /` |
@@ -86,23 +124,28 @@ of cheap read-only commands.
 | simulators | count of `launchd_sim` processes (one per booted simulator) | not shown |
 | xcodebuild | count of `xcodebuild` processes | not shown |
 
-A metric a host cannot read is left out of its card; it is never shown as zero.
-CPU is averaged over the last three readings (45 s at the default interval),
-because a single one second window swings between 20 % and 90 % on this kind of
-work. The first reading, and one-shot snapshots, are instantaneous.
+A metric a host cannot read is left out of its section; it is never shown as zero.
+The CPU number and verdict use the average of the last three readings (45 s at the
+default interval), because a single one second window swings between 20 % and 90 %
+on this kind of work. The chart draws the raw readings. The first reading, and
+one-shot snapshots, are instantaneous.
 
 ## Verdict thresholds
 
-The worst signal wins. Thresholds live in `src/verdict.js`.
+The verdict answers one question: how loaded is this machine? The worse of two signals
+wins, with CPU the one that matters for most work. Thresholds live in `src/verdict.js`.
 
 | Signal | busy | saturated |
 | --- | --- | --- |
-| booted simulators | 1 or more | host ceiling (default 2) |
-| xcodebuild | 1 or more | |
 | cpu (3 reading average) | 40 % | 85 % |
-| 5 minute load per core | 1.0 | 6.0 |
-| memory used (100 minus free %) | 60 % | 85 % |
-| memory pressure | warn | critical |
 | gpu | 50 % | 90 % |
-| free disk | under 30 GB | under 10 GB |
 
+Everything else is reported but leaves the verdict alone. Simulators are a count: check
+`simsFree` to decide whether another one fits, against a ceiling of 2 per host by default
+(`simCeiling`). Memory, disk, load average and `xcodebuild` are shown as their own numbers,
+and the memory and disk numbers change colour at their own cut points, also in
+`src/verdict.js`.
+
+## License
+
+MIT

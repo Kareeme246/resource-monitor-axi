@@ -1,40 +1,68 @@
+import { readFileSync } from "node:fs";
+import { AxiError, runAxiCli } from "axi-sdk-js";
 import { encode } from "@toon-format/toon";
-import { DEFAULT_INTERVAL_S, MIN_INTERVAL_S, configPath, loadConfig, writeDefaultConfig } from "./config.js";
-import { detectColorDepth, renderPanel } from "./render.js";
+import { gapMsFor, nextInCycle, renderFrame } from "./charts.js";
+import { DEFAULT_INTERVAL_S, DEFAULT_WINDOW, INTERVALS, MIN_INTERVAL_S, WINDOWS, configPath, loadConfig, writeDefaultConfig } from "./config.js";
+import { addRecord, historyPath, loadHistory, recordOf } from "./history.js";
+import { detectColorDepth } from "./render.js";
 import { closeConnections, sampleHost } from "./ssh.js";
 import { THRESHOLDS, verdict } from "./verdict.js";
 
-const HELP = `usage: resource-monitor-axi [--watch] [flags]
-description: Spare-capacity snapshot of the ssh hosts in the config file (Mac and Linux, agentless)
-commands[2]:
-  (none)=snapshot, init
+const PACKAGE = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+const DESCRIPTION = "Spare-capacity snapshot and live charts of the ssh hosts in the config file (Mac and Linux, agentless)";
+
+const FIELDS = ["host", "verdict", "simsFree", "reason"];
+const ALL_FIELDS = [...FIELDS.slice(0, 3), "cpuPct", "memPct", "memPressure", "gpuPct", "load1", "load5", "cores", "diskFreeGB", "sims", "simCeiling", "xcodebuild", "reason"];
+
+const HELP = `usage: resource-monitor-axi [--tui] [flags]
+description: ${DESCRIPTION}
+commands[3]:
+  (none)=snapshot, init, update
 output:
-  Default TOON snapshot, one row per host with a spare-capacity verdict (free, busy, saturated). --json prints the same data as JSON. --watch draws the live card panel (q quits).
-  A host that cannot be reached becomes a stale row and never stops the others.
+  Default TOON snapshot, one row per host with a verdict (free, busy, saturated) from cpu and gpu load, and simsFree for how many more simulators fit, plus count, summary and total simsFree. A host that cannot be reached goes under unreachable and never stops the others.
+  --fields <a,b,c> picks columns and --full shows all of them: ${ALL_FIELDS.join(",")}. --json prints every field as JSON unless --fields narrows it.
+flags[11]:
+  --fields <a,b,c>, --full, --json, --config <file>, --tui, --once, --view <charts|cards>, --interval <seconds>, --theme <light|dark>, --help, --version
+tui:
+  --tui draws the live panel for people and needs a terminal. --once prints one frame, for any output.
+  Keys, also shown along its bottom: v charts or cards, w chart window, i sample interval, j k or arrows scroll, space or page keys scroll a page, g G top and bottom, q quit.
+  It keeps 24 hours of readings per host in a small local file. --view, --interval, --theme and --once need --tui.
 config:
   ${configPath()}
-  {"hosts":["build-box.local",{"host":"mini","label":"Mac mini"}],"interval":15}
-  Hosts are ~/.ssh/config aliases. interval is seconds between samples per host (default ${DEFAULT_INTERVAL_S}, minimum ${MIN_INTERVAL_S}); resource-monitor-axi init writes a starter file.
-flags[6]:
-  --watch, --once, --json, --interval <seconds>, --theme <light|dark>, --help
+  {"hosts":["build-box.local",{"host":"mini","label":"Mac mini"}],"interval":15,"window":"${DEFAULT_WINDOW}"}
+  Hosts are ~/.ssh/config aliases. interval is seconds between samples per host (default ${DEFAULT_INTERVAL_S}, minimum ${MIN_INTERVAL_S}). window is the chart span that opens first (${WINDOWS.map((w) => w.label).join(", ")}; default ${DEFAULT_WINDOW}). resource-monitor-axi init writes a starter file.
 notes:
-  Samples ride one reused ssh connection per host and run stock tools. Nothing is installed on or left running on a host.
-  --watch with --once prints a single panel frame and exits. RESOURCE_MONITOR_AXI_SSH_CONFIG=<file> points ssh at another config file.
+  Samples ride one reused ssh connection per host and run stock tools, and never prompt. Nothing is installed on or left running on a host. RESOURCE_MONITOR_AXI_SSH_CONFIG=<file> points ssh at another config file.
 examples:
   resource-monitor-axi
-  resource-monitor-axi --json
-  resource-monitor-axi --watch
-  resource-monitor-axi --watch --interval 30`;
+  resource-monitor-axi --fields host,verdict,cpuPct,load5
+  resource-monitor-axi --full
+  resource-monitor-axi --tui
+  resource-monitor-axi --tui --view cards --interval 30
+  resource-monitor-axi update --check
+`;
+
+const INIT_HELP = `usage: resource-monitor-axi init
+description: Write a starter config file. Safe to repeat: an existing file is left alone.
+config: ${configPath()}
+`;
+
+const usage = (message, ...suggestions) => new AxiError(message, "VALIDATION_ERROR", suggestions.length ? suggestions : ["Run `resource-monitor-axi --help`"]);
+
+const VALUE_FLAGS = ["--interval", "--theme", "--config", "--view", "--fields"];
+const SWITCHES = ["--tui", "--once", "--json", "--full"];
+/** These only mean something to the panel, so without --tui they fail loud. */
+const TUI_ONLY = ["once", "view", "interval", "theme"];
 
 function parseArgs(argv) {
   const flags = { _: [] };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (["--watch", "--once", "--json", "--help", "-h"].includes(arg)) flags[arg.replace(/^-+/, "")] = true;
-    else if (arg === "--interval" || arg === "--theme" || arg === "--config") {
+    if (SWITCHES.includes(arg)) flags[arg.slice(2)] = true;
+    else if (VALUE_FLAGS.includes(arg)) {
       flags[arg.slice(2)] = argv[++i];
-      if (flags[arg.slice(2)] === undefined) throw new Error(`${arg} needs a value`);
-    } else if (arg.startsWith("-")) throw new Error(`unknown flag ${arg}`);
+      if (flags[arg.slice(2)] === undefined) throw usage(`${arg} needs a value`);
+    } else if (arg.startsWith("-")) throw usage(`unknown flag ${arg}`);
     else flags._.push(arg);
   }
   return flags;
@@ -43,10 +71,30 @@ function parseArgs(argv) {
 function parseInterval(value, fallback) {
   if (value === undefined) return fallback;
   const m = /^(\d+(?:\.\d+)?)(s|m)?$/.exec(String(value));
-  if (!m) throw new Error(`--interval wants seconds like 15 or 30s, got ${value}`);
+  if (!m) throw usage(`--interval wants seconds like 15 or 30s, got ${value}`);
   const seconds = Number(m[1]) * (m[2] === "m" ? 60 : 1);
-  if (seconds < MIN_INTERVAL_S) throw new Error(`--interval must be at least ${MIN_INTERVAL_S}s so hosts stay quiet`);
+  if (seconds < MIN_INTERVAL_S) throw usage(`--interval must be at least ${MIN_INTERVAL_S}s so hosts stay quiet`);
   return seconds;
+}
+
+function parseTheme(value) {
+  if (value === undefined || value === "dark") return "dark";
+  if (value === "light") return value;
+  throw usage(`--theme wants light or dark, got ${value}`);
+}
+
+function parseFields(value) {
+  if (value === undefined) return undefined;
+  const fields = value.split(",").filter(Boolean);
+  const bad = fields.filter((f) => !ALL_FIELDS.includes(f));
+  if (bad.length || !fields.length) throw usage(`--fields does not know ${bad.join(",") || "an empty list"}`, `Choose from ${ALL_FIELDS.join(",")}`);
+  return fields.includes("host") ? fields : ["host", ...fields];
+}
+
+function parseView(value) {
+  if (value === undefined) return "charts";
+  if (value === "charts" || value === "cards") return value;
+  throw usage(`--view wants charts or cards, got ${value}`);
 }
 
 const initialState = ({ host, label, simCeiling }) => ({
@@ -70,9 +118,11 @@ export async function refresh(state, sample = sampleHost) {
     state.sample = next;
     state.sampledAt = Date.now();
     delete state.error;
+    addRecord(state, recordOf(next, state.sampledAt));
   } catch (error) {
     state.error = error.message;
     state.failedAt = Date.now();
+    addRecord(state, { t: state.failedAt, down: 1 });
   }
 }
 
@@ -85,6 +135,7 @@ export function snapshotData(states, now = Date.now()) {
       const s = st.sample;
       Object.assign(row, {
         verdict: v.label,
+        simsFree: v.simsFree ?? null,
         cpuPct: s.cpuPct ?? null,
         memPct: s.memPct ?? null,
         memPressure: s.memPressure ?? null,
@@ -96,7 +147,7 @@ export function snapshotData(states, now = Date.now()) {
         sims: s.sims ?? null,
         simCeiling: s.sims !== undefined ? simCeiling : null,
         xcodebuild: s.xcodebuild ?? null,
-        reason: v.reasons.join("; ") || (v.simsFree === undefined ? "spare capacity" : `room for ${v.simsFree} more sims`),
+        reason: v.reasons.join("; ") || "spare capacity",
       });
     } else {
       Object.assign(row, { verdict: null, error: st.error ?? null });
@@ -107,122 +158,249 @@ export function snapshotData(states, now = Date.now()) {
   return hosts;
 }
 
-function snapshotOutput(states, json) {
-  const hosts = snapshotData(states);
-  const down = hosts.filter((h) => h.status !== "ok");
-  if (json) {
-    return JSON.stringify({ generatedAt: new Date().toISOString(), simCeiling: THRESHOLDS.simCeiling, hosts }, null, 2);
-  }
+/** Counts an agent would otherwise have to work out from the rows. */
+function aggregates(hosts) {
   const ok = hosts.filter((h) => h.status === "ok");
+  const count = (name) => ok.filter((h) => h.verdict === name).length;
+  const summary = `${count("free")} free, ${count("busy")} busy, ${count("saturated")} saturated, ${hosts.length - ok.length} unreachable`;
+  return { count: hosts.length, summary, simsFree: ok.reduce((sum, h) => sum + (h.simsFree ?? 0), 0) };
+}
+
+const pick = (row, fields) => Object.fromEntries(fields.map((f) => [f, row[f] ?? null]));
+
+function snapshotOutput(states, { json, full, fields }) {
+  const hosts = snapshotData(states);
+  const ok = hosts.filter((h) => h.status === "ok");
+  const down = hosts.filter((h) => h.status !== "ok");
+  const columns = fields ?? (full || json ? ALL_FIELDS : FIELDS);
   const doc = {
     generatedAt: new Date().toISOString(),
-    hosts: ok.map(({ status, error, lastReadingAgeS, ...rest }) => rest),
+    ...aggregates(hosts),
+    hosts: ok.map((h) => pick(h, columns)),
   };
-  if (down.length) doc.unreachable = down.map((h) => ({ host: h.host, error: h.error }));
+  if (down.length) doc.unreachable = down.map((h) => ({ host: h.host, error: h.error, lastReadingAgeS: h.lastReadingAgeS ?? null }));
+  if (json) return JSON.stringify(doc, null, 2);
   doc.help = [
-    `simulator ceiling is configurable per host (default ${THRESHOLDS.simCeiling} booted simulators); verdict thresholds live in the README`,
-    "Run `resource-monitor-axi --watch` for the live card panel",
+    ...(fields || full ? [] : ["Run `resource-monitor-axi --full` for every metric, or --fields <a,b,c> to pick them"]),
+    ...(down.length ? ["Run `ssh <host> true` to check an unreachable host"] : []),
+    `Simulator ceiling is per host in ${configPath()} (default ${THRESHOLDS.simCeiling})`,
   ];
   return encode(doc);
+}
+
+/** Open a host's local history. Time since its last record was time the panel was off. */
+export function hydrate(state, intervalS, { now = Date.now(), path = historyPath(state.host) } = {}) {
+  state.historyPath = path;
+  state.points = loadHistory(path, now);
+  const last = state.points.at(-1);
+  if (!last) return;
+  if (now - last.t > gapMsFor(intervalS)) state.panelOff = { from: last.t, to: now };
+  const reading = state.points.findLast((p) => !p.down);
+  if (reading) state.lastReadingAt = reading.t;
+}
+
+/** A chunk of terminal input as single keys and whole escape sequences. */
+const splitKeys = (text) => text.match(/\x1b\[[0-9;]*[A-Za-z~]|[\s\S]/g) ?? [];
+
+const SCROLL_KEYS = {
+  j: 1,
+  "\x1b[B": 1,
+  k: -1,
+  "\x1b[A": -1,
+  " ": "page",
+  "\x1b[6~": "page",
+  "\x1b[5~": "-page",
+  g: "top",
+  "\x1b[H": "top",
+  G: "bottom",
+  "\x1b[F": "bottom",
+};
+
+/** Apply one key to the view state. Returns true when it should repaint. */
+export function applyKey(key, ui, { page = 10, maxScroll = 0 } = {}) {
+  if (key === "v") {
+    ui.view = ui.view === "charts" ? "cards" : "charts";
+    ui.scroll = 0;
+    return true;
+  }
+  if (key === "w") {
+    ui.windowS = nextInCycle(WINDOWS.map((w) => w.seconds), ui.windowS);
+    return true;
+  }
+  if (key === "i") {
+    ui.intervalS = nextInCycle(INTERVALS, ui.intervalS);
+    return true;
+  }
+  const move = SCROLL_KEYS[key];
+  if (move === undefined) return false;
+  const next =
+    move === "page" ? ui.scroll + page : move === "-page" ? ui.scroll - page : move === "top" ? 0 : move === "bottom" ? maxScroll : ui.scroll + move;
+  ui.scroll = Math.min(maxScroll, Math.max(0, next));
+  return true;
 }
 
 const ENTER_SCREEN = "\x1b[?1049h\x1b[?25l";
 const LEAVE_SCREEN = "\x1b[?25h\x1b[?1049l";
 const CLEAR = "\x1b[H\x1b[2J";
 
-async function watch(states, { intervalS, theme, depth }) {
+async function panel(states, { theme, depth, ui }) {
   const out = process.stdout;
-  let quit = false;
-  let wake;
+  let last = { maxScroll: 0 };
   const frame = () =>
-    renderPanel(states, {
+    renderFrame(states, {
+      view: ui.view,
+      windowS: ui.windowS,
+      scroll: ui.scroll,
       columns: out.columns || 80,
       rows: out.rows,
-      intervalS,
+      intervalS: ui.intervalS,
       now: Date.now(),
       depth,
       theme,
+      keys: true,
     });
-  const draw = () => out.write(`${CLEAR}${frame()}`);
-  const stop = () => {
-    quit = true;
-    wake?.();
+  // Repaint in place so a once a second redraw never flickers. Each line is
+  // erased before it is written: erasing after a full-width line would eat its
+  // last character.
+  const draw = () => {
+    last = frame();
+    ui.scroll = last.scroll;
+    const lines = last.text.split("\n");
+    const below = lines.length < (out.rows ?? Infinity) ? "\r\n\x1b[J" : "";
+    out.write(`\x1b[H${lines.map((l) => `\x1b[K${l}`).join("\r\n")}${below}`);
+  };
+  const redraw = () => {
+    out.write(CLEAR);
+    draw();
   };
 
+  let stop;
+  const stopped = new Promise((resolve) => (stop = resolve));
+  let quit = false;
+  stopped.then(() => (quit = true));
+
   out.write(ENTER_SCREEN);
-  out.on("resize", draw);
+  out.on("resize", redraw);
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
   if (process.stdin.isTTY) {
     process.stdin.setRawMode(true);
     process.stdin.resume();
     process.stdin.on("data", (chunk) => {
-      const text = chunk.toString();
-      if (/[qQ\x03\x04]/.test(text)) stop();
+      for (const key of splitKeys(chunk.toString())) {
+        if (/^[qQ\x03\x04]$/.test(key)) return stop();
+        const page = Math.max(1, (out.rows ?? 24) - 3);
+        if (applyKey(key, ui, { page, maxScroll: last.maxScroll })) draw();
+      }
     });
   }
   draw();
 
   // Each host owns its cadence: sample, repaint, then wait out the rest of the
   // interval, so a slow host never delays the others and none is polled early.
-  const loops = states.map(async (state) => {
-    while (!quit) {
-      const started = Date.now();
-      await refresh(state);
-      if (quit) break;
-      draw();
-      const wait = Math.max(0, intervalS * 1000 - (Date.now() - started));
-      await new Promise((resolve) => {
-        const timer = setTimeout(resolve, wait);
-        wake = () => {
-          clearTimeout(timer);
-          resolve();
-        };
-      });
-    }
-  });
-  // Keep the "stale 42s" ages moving between samples.
+  for (const state of states) {
+    (async () => {
+      while (!quit) {
+        const started = Date.now();
+        await refresh(state);
+        if (quit) break;
+        draw();
+        // Rechecked each second, so changing the interval with i applies at once.
+        while (!quit && Date.now() - started < ui.intervalS * 1000) {
+          await Promise.race([stopped, new Promise((resolve) => setTimeout(resolve, Math.min(1000, ui.intervalS * 1000 - (Date.now() - started))).unref())]);
+        }
+      }
+    })();
+  }
+  // Keep the "stale 42s" ages and the chart's clock moving between samples.
   const clock = setInterval(draw, 1000);
-  await Promise.race([Promise.all(loops), new Promise((resolve) => (wake = resolve))]);
-  quit = true;
+  await stopped;
   clearInterval(clock);
   out.write(LEAVE_SCREEN);
-  out.off("resize", draw);
+  out.off("resize", redraw);
   if (process.stdin.isTTY) {
     process.stdin.setRawMode(false);
     process.stdin.pause();
   }
 }
 
-export async function main(argv) {
+/** Take one snapshot, or draw the panel when --tui asks for it. */
+async function run(argv) {
   const flags = parseArgs(argv);
-  if (flags.help) return console.log(HELP);
-  if (flags._[0] === "init") {
-    const path = configPath();
-    return console.log(writeDefaultConfig(path) ? `wrote ${path}` : `${path} already exists`);
+  if (flags._.length) throw usage(`unknown command ${flags._[0]}`);
+  if (!flags.tui) {
+    const stray = TUI_ONLY.find((name) => flags[name] !== undefined);
+    if (stray) throw usage(`--${stray} needs --tui`, `Run \`resource-monitor-axi --tui --${stray}${stray === "once" ? "" : " <value>"}\``);
+  } else {
+    for (const name of ["json", "full", "fields"]) if (flags[name] !== undefined) throw usage(`--${name} is for the snapshot, not --tui`);
+    if (!flags.once && !(process.stdout.isTTY && process.stdin.isTTY)) {
+      throw usage("--tui needs a terminal", "Run `resource-monitor-axi` for a snapshot, or `resource-monitor-axi --tui --once` for one frame");
+    }
   }
-  if (flags._.length) throw new Error(`unknown command ${flags._[0]}`);
+  const fields = parseFields(flags.fields);
+  const theme = parseTheme(flags.theme);
+  const view = parseView(flags.view);
 
   const config = loadConfig(flags.config);
   const intervalS = parseInterval(flags.interval, config.intervalS);
-  const theme = flags.theme === "light" ? "light" : "dark";
+  const windowS = WINDOWS.find((w) => w.label === config.window).seconds;
   const states = config.hosts.map(initialState);
   const hostNames = config.hosts.map((h) => h.host);
+  if (flags.tui) for (const state of states) hydrate(state, intervalS);
 
   try {
-    if (flags.watch && !flags.once) {
-      await watch(states, { intervalS, theme, depth: detectColorDepth(process.env, process.stdout.isTTY) });
-      return;
+    if (flags.tui && !flags.once) {
+      const ui = { view, windowS, intervalS, scroll: 0 };
+      await panel(states, { theme, depth: detectColorDepth(process.env, process.stdout.isTTY), ui });
+      return "";
     }
     await Promise.all(states.map((st) => refresh(st)));
-    if (flags.watch) {
+    if (flags.tui) {
       const depth = detectColorDepth(process.env, process.stdout.isTTY);
-      console.log(renderPanel(states, { columns: process.stdout.columns || 100, rows: undefined, intervalS, depth, theme }));
-    } else {
-      console.log(snapshotOutput(states, flags.json));
+      return renderFrame(states, { view, windowS, columns: process.stdout.columns || 100, intervalS, depth, theme }).text;
     }
+    return snapshotOutput(states, { json: flags.json, full: flags.full, fields });
   } finally {
     // A one-shot or quit panel should not leave ssh masters behind.
     await closeConnections(hostNames);
+    // A sample still in flight at quit has nothing left to report to.
+    if (flags.tui && !flags.once) process.exit(0);
   }
+}
+
+function init(argv) {
+  if (argv.length) throw usage(`init takes no arguments, got ${argv[0]}`, "Set RESOURCE_MONITOR_AXI_CONFIG to choose another path");
+  const path = configPath();
+  const created = writeDefaultConfig(path);
+  return { config: path, status: created ? "created" : "already exists", help: [`Edit ${path} to list your ssh aliases`, "Run `resource-monitor-axi` for a snapshot"] };
+}
+
+/**
+ * Bare flags mean the snapshot or panel, so route them onto a command name for
+ * runAxiCli, which owns help, version, the built-in `update` and error framing.
+ */
+export function normalizeArgv(raw) {
+  // No arguments at all is the home view: live data under the SDK's bin and description.
+  if (raw.length === 0) return [];
+  for (let i = 0; i < raw.length; i++) {
+    if (VALUE_FLAGS.includes(raw[i])) i++;
+    else if (!raw[i].startsWith("-")) return [raw[i], ...raw.slice(0, i), ...raw.slice(i + 1)];
+  }
+  if (raw.includes("--help") || raw.includes("-h")) return ["--help"];
+  const version = raw.find((arg) => arg === "--version" || arg === "-v" || arg === "-V");
+  if (version) return [version];
+  return ["run", ...raw];
+}
+
+export async function main(argv) {
+  await runAxiCli({
+    argv: normalizeArgv(argv),
+    description: DESCRIPTION,
+    version: PACKAGE.version,
+    packageName: PACKAGE.name,
+    topLevelHelp: HELP,
+    commands: { run, init },
+    home: run,
+    getCommandHelp: (command) => (command === "init" ? INIT_HELP : HELP),
+  });
 }

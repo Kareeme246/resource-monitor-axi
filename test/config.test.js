@@ -49,3 +49,19 @@ test("loadConfig rejects invalid simCeiling", () => {
     } catch {}
   }
 });
+
+test("the interval floor is 3 s and the window defaults to 1h", () => {
+  const tmp = join(tmpdir(), `resource-monitor-axi-cfg-win-${Date.now()}.json`);
+  try {
+    writeFileSync(tmp, JSON.stringify({ hosts: ["a"], interval: 3 }));
+    assert.deepEqual([loadConfig(tmp).intervalS, loadConfig(tmp).window], [3, "1h"]);
+    writeFileSync(tmp, JSON.stringify({ hosts: ["a"], window: "15m" }));
+    assert.equal(loadConfig(tmp).window, "15m");
+    writeFileSync(tmp, JSON.stringify({ hosts: ["a"], window: "2h" }));
+    assert.throws(() => loadConfig(tmp), /window/);
+    writeFileSync(tmp, JSON.stringify({ hosts: ["a"], interval: 2 }));
+    assert.throws(() => loadConfig(tmp), /interval/);
+  } finally {
+    unlinkSync(tmp);
+  }
+});

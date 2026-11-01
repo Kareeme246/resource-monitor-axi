@@ -1,18 +1,26 @@
 {
   "name": "resource-monitor-axi",
   "version": "0.1.0",
-  "description": "Live card panel of spare capacity on remote Mac and Linux hosts, agentless over ssh",
+  "description": "Live charts of how hard remote Mac and Linux hosts are working, agentless over ssh",
   "scripts": {
     "test": "node --test \"test/*.test.js\""
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "packageManager": "pnpm@12.5.1",
   "type": "module",
   "dependencies": {
-    "@toon-format/toon": "^4.4.0"
+    "@toon-format/toon": "^4.4.0",
+    "axi-sdk-js": "^0.1.13"
   },
+  "files": [
+    "bin",
+    "src",
+    "LICENSE",
+    "config.example.json",
+    "README.md"
+  ],
   "bin": {
     "resource-monitor-axi": "./bin/resource-monitor-axi.js"
   },

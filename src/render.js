@@ -6,8 +6,8 @@
  */
 import { THRESHOLDS, loadPerCore, usageLevel, verdict } from "./verdict.js";
 
-const CARD_WIDTH = 49;
-const MIN_CARD_WIDTH = 30;
+export const CARD_WIDTH = 49;
+export const MIN_CARD_WIDTH = 30;
 const GUTTER = 2;
 const LABEL_WIDTH = 8;
 
@@ -47,8 +47,8 @@ const PALETTES = {
   },
 };
 
-const HEALTH = ["ok", "warn", "crit"];
-const HEALTH_BOLD = ["okBold", "warnBold", "critBold"];
+export const HEALTH = ["ok", "warn", "crit"];
+export const HEALTH_BOLD = ["okBold", "warnBold", "critBold"];
 
 /** Honors NO_COLOR, TERM=dumb and non-TTY output; FORCE_COLOR re-enables. */
 export function detectColorDepth(env, isTty) {
@@ -75,7 +75,7 @@ function sgr(style, depth, theme) {
   return codes.join(";");
 }
 
-function paint(line, { depth = "none", theme = "dark" }) {
+export function paint(line, { depth = "none", theme = "dark" }) {
   return line
     .map(({ text, style }) =>
       depth === "none" || !style ? text : `\x1b[${sgr(style, depth, theme)}m${text}\x1b[0m`,
@@ -83,14 +83,55 @@ function paint(line, { depth = "none", theme = "dark" }) {
     .join("");
 }
 
-const width = (text) => [...text].length;
-const fit = (text, w) => {
+export const width = (text) => [...text].length;
+export const fit = (text, w) => {
   if (w <= 0) return "";
   const chars = [...text];
   return chars.length <= w ? text : `${chars.slice(0, Math.max(0, w - 1)).join("")}…`;
 };
-const padEnd = (text, w) => text + " ".repeat(Math.max(0, w - width(text)));
-const lineWidth = (line) => line.reduce((sum, seg) => sum + width(seg.text), 0);
+export const padEnd = (text, w) => text + " ".repeat(Math.max(0, w - width(text)));
+export const lineWidth = (line) => line.reduce((sum, seg) => sum + width(seg.text), 0);
+
+/** Text as flow units: each word stays whole and keeps its style. */
+export const words = (text, style) =>
+  text.split(/\s+/).filter(Boolean).map((word) => ({ segs: [{ text: word, style }], gap: 1 }));
+
+/**
+ * Lay units out left to right, wrapping onto further lines instead of clipping.
+ * Later lines start at `indent`; `gap` is the space a unit wants before it. A
+ * unit wider than a whole line is broken, so nothing is ever lost.
+ */
+export function flow(units, w, { indent = 0 } = {}) {
+  const room = Math.max(1, w - indent);
+  const lines = [[]];
+  let used = 0;
+  const place = (segs, gap) => {
+    const size = lineWidth(segs);
+    const fresh = lines.length > 1 ? used === indent : used === 0;
+    if (!fresh && used + gap + size > w) {
+      lines.push(indent ? [{ text: " ".repeat(indent) }] : []);
+      used = indent;
+    } else if (!fresh && gap) {
+      lines.at(-1).push({ text: " ".repeat(gap) });
+      used += gap;
+    }
+    lines.at(-1).push(...segs);
+    used += size;
+  };
+  for (const { segs, gap = 1 } of units) {
+    if (lineWidth(segs) <= room) {
+      place(segs, gap);
+      continue;
+    }
+    for (const seg of segs) {
+      const chars = [...seg.text];
+      for (let i = 0; i < chars.length; i += room) {
+        place([{ ...seg, text: chars.slice(i, i + room).join("") }], i === 0 ? gap : 0);
+      }
+    }
+  }
+  return lines;
+}
 
 /** Quiet-ledger thin bar: fill at half-cell resolution on a dim track. */
 export function thinBar(pct, w, style) {
@@ -106,7 +147,7 @@ export function thinBar(pct, w, style) {
   return coalesce(segs);
 }
 
-function coalesce(segs) {
+export function coalesce(segs) {
   const out = [];
   for (const seg of segs) {
     const last = out[out.length - 1];
@@ -116,7 +157,7 @@ function coalesce(segs) {
   return out;
 }
 
-function trimRight(line) {
+export function trimRight(line) {
   const out = line.map((s) => ({ ...s }));
   while (out.length) {
     const last = out[out.length - 1];
@@ -161,7 +202,7 @@ function interior(w, content, border) {
   return [{ text: "│", style: border }, ...content, { text: " ".repeat(pad) }, { text: "│", style: border }];
 }
 
-function shortChip(chip) {
+export function shortChip(chip) {
   return (chip ?? "").replace(/^Apple /, "").replace(/\(R\)|\(TM\)/g, "").replace(/\s+/g, " ").trim();
 }
 
@@ -169,6 +210,7 @@ function shortChip(chip) {
 function barRow(w, label, pct, { level = 0, text, detail = "", dim = false }) {
   // The dim detail column gives way first when the card gets narrow.
   const dw = w >= 44 ? 9 : w >= 36 ? 6 : 0;
+  if (dw < 9) detail = detail.replace(" free", "");
   const pctText = text ?? (pct === undefined ? "?" : `${Math.min(999, Math.round(pct))}%`);
   const tw = Math.max(4, pctText.length);
   const bar = Math.max(4, w - 2 - 3 - LABEL_WIDTH - 1 - tw - 1 - dw - (dw ? 1 : 0));
@@ -252,25 +294,20 @@ function metricRows(w, s, dim, t = THRESHOLDS) {
   }
   if (s.xcodebuild !== undefined) {
     rows.push(
-      textRow(w, "xcode", s.xcodebuild === 0 ? "idle" : `${s.xcodebuild} xcodebuild`, s.xcodebuild ? "warn" : "dim", dim),
+      textRow(w, "builds", s.xcodebuild === 0 ? "no xcodebuild" : `${s.xcodebuild} xcodebuild`, s.xcodebuild ? "warn" : "dim", dim),
     );
   }
   return rows;
 }
 
-function verdictRow(w, v, dim) {
-  const detail =
-    v.level === 0
-      ? v.simsFree === undefined
-        ? "spare capacity"
-        : `room for ${v.simsFree} more sim${v.simsFree === 1 ? "" : "s"}`
-      : v.reasons.slice(0, 3).join(" · ");
-  return [
-    { text: "   " },
-    { text: "● ", style: dim ? "dimmer" : HEALTH_BOLD[v.level] },
-    { text: v.label, style: dim ? "dimmer" : HEALTH_BOLD[v.level] },
-    { text: `  ${fit(detail, Math.max(0, w - 2 - 3 - 2 - v.label.length - 3))}`, style: dim ? "dimmer" : "dim" },
-  ];
+/** The verdict and its reasons, wrapped so no reason is ever cut off. */
+function verdictRows(w, v, dim) {
+  const detail = v.level === 0 ? "spare capacity" : v.reasons.join(" · ");
+  const style = dim ? "dimmer" : HEALTH_BOLD[v.level];
+  const head = { segs: [{ text: "● ", style }, { text: v.label, style }], gap: 0 };
+  const units = [head, ...words(detail, dim ? "dimmer" : "dim").map((u, i) => (i ? u : { ...u, gap: 2 }))];
+  const indent = Math.min(2 + v.label.length + 2, 8);
+  return flow(units, w - 2 - 3 - 1, { indent }).map((line) => [{ text: "   " }, ...line]);
 }
 
 /** Whole seconds as `42s`, `3m`, `2h`. */
@@ -294,7 +331,7 @@ export function buildCard(state, w, shape, now) {
   const v = sampleWithCeiling && !stale ? verdict(sampleWithCeiling, t) : undefined;
   const name = state.label;
 
-  if (shape === "line") return [lineCard(state, v, w, now)];
+  if (shape === "line") return lineCard(state, v, w, now);
 
   const border = stale ? "borderDim" : "border";
   const dot = stale ? "○" : "●";
@@ -324,20 +361,16 @@ export function buildCard(state, w, shape, now) {
     if (s) lines.push(...metricRows(w, sampleWithCeiling, true, t).map(row));
     const msg = state.error ?? "waiting for first reading";
     if (s) lines.push(row([]));
-    lines.push(row([{ text: `   ${fit(`● ${msg}`, Math.max(0, w - 6))}`, style: state.error ? "crit" : "dim" }]));
+    const room = Math.max(1, w - 6);
+    const pushWrapped = (units, indent) =>
+      lines.push(...flow(units, room, { indent }).map((line) => row([{ text: "   " }, ...line])));
+    pushWrapped(words(`● ${msg}`, state.error ? "crit" : "dim"), 2);
     const staleMsg = s ? `last reading ${ago(now - state.sampledAt)} ago, excluded from totals` : "no reading yet";
-    lines.push(
-      row([
-        {
-          text: `   ${fit(staleMsg, Math.max(0, w - 6))}`,
-          style: "dimmer",
-        },
-      ]),
-    );
+    pushWrapped(words(staleMsg, "dimmer"), 0);
   } else {
     lines.push(...metricRows(w, sampleWithCeiling, false, t).map(row));
     if (pad) lines.push(row([]));
-    lines.push(row(verdictRow(w, v, false)));
+    lines.push(...verdictRows(w, v, false).map(row));
   }
   if (pad) lines.push(row([]));
   lines.push(bottomLine(w, border));
@@ -363,8 +396,9 @@ function lineCard(state, v, w, now) {
     { text: padEnd(fit(status, sw), sw), style },
   ];
   const tail = stale && s ? `stale ${ago(now - state.sampledAt)}` : bits.join(" · ");
-  const tailWidth = Math.max(0, w - 2 - lw - sw);
-  return [...head, ...(tailWidth > 0 ? [{ text: fit(tail, tailWidth), style: dim ? "dimmer" : "dim" }] : [])];
+  // The columns stay aligned; the tail wraps beneath them rather than clip.
+  const units = [{ segs: head, gap: 0 }, ...words(tail, dim ? "dimmer" : "dim").map((u, i) => (i ? u : { ...u, gap: 0 }))];
+  return flow(units, w, { indent: 2 });
 }
 
 function layout(cards, w, columns) {
@@ -387,6 +421,18 @@ function layout(cards, w, columns) {
   return out;
 }
 
+/** The fleet counts, without the zeros when the full list does not fit. */
+export function countsText(levels, stale, room) {
+  const counts = [0, 1, 2].map((lvl) => [levels.filter((x) => x === lvl).length, ["free", "busy", "saturated"][lvl]]);
+  counts.push([stale, "stale"]);
+  const all = counts.map(([n, name]) => `${n} ${name}`).join(" · ");
+  if (width(all) <= room) return all;
+  return counts.filter(([n]) => n > 0).map(([n, name]) => `${n} ${name}`).join(" · ");
+}
+
+/** The first of `choices` that fits, or the last one cut to fit. */
+export const firstFit = (choices, room) => choices.find((c) => width(c) <= room) ?? fit(choices.at(-1), room);
+
 /** The fleet summary: one dim line when it fits, otherwise two. */
 function headerLines(states, v, intervalS, now, columns) {
   const stale = states.filter((st) => st.error || !st.sample).length;
@@ -396,27 +442,35 @@ function headerLines(states, v, intervalS, now, columns) {
   const room = columns - 2;
   const one = ["resource-monitor-axi", time, `${intervalS}s`, ...counts].join(" · ");
   if (width(one) <= room) return [one];
-  return [["resource-monitor-axi", time, `every ${intervalS}s`].join(" · "), counts.join(" · ")].map((l) => fit(l, room));
+  const top = ["resource-monitor-axi", time, `every ${intervalS}s`];
+  return [
+    firstFit([top.join(" · "), ["resource-monitor-axi", time, `${intervalS}s`].join(" · "), [time, `every ${intervalS}s`].join(" · ")], room),
+    countsText(v, stale, room),
+  ];
 }
 
-/**
- * Render the panel for `states`, sized to `columns` x `rows` (rows optional).
- * Picks the roomiest card shape whose total height fits.
- */
-export function renderPanel(states, { columns = 80, rows, intervalS = 15, now = Date.now(), depth = "none", theme = "dark" } = {}) {
-  const w = Math.max(MIN_CARD_WIDTH, Math.min(CARD_WIDTH, columns));
-  const levels = states
+/** The verdict levels of the hosts that count towards the totals. */
+export function hostLevels(states) {
+  return states
     .map((st) => {
       if (!st.sample || st.error) return undefined;
       const simCeiling = st.simCeiling ?? st.sample.simCeiling ?? THRESHOLDS.simCeiling;
       return verdict({ ...st.sample, simCeiling }).level;
     })
     .filter((l) => l !== undefined);
-  const header = headerLines(states, levels, intervalS, now, columns).map((text) => [{ text: `  ${text}`, style: "dim" }]);
+}
+
+/**
+ * The card view as a pinned header and a scrollable body. Picks the roomiest
+ * card shape whose total height fits.
+ */
+export function cardsFrame(states, { columns = 80, rows, intervalS = 15, now = Date.now() } = {}) {
+  const w = Math.max(MIN_CARD_WIDTH, Math.min(CARD_WIDTH, columns));
+  const header = headerLines(states, hostLevels(states), intervalS, now, columns).map((text) => [{ text: `  ${text}`, style: "dim" }]);
 
   const build = (shape) => layout(states.map((st) => buildCard(st, w, shape, now)), w, columns);
   // The one-row shape is a plain list, so it bypasses the box layout.
-  const lineRows = () => states.map((st) => [{ text: "  " }, ...buildCard(st, columns - 2, "line", now)[0]]);
+  const lineRows = () => states.flatMap((st) => buildCard(st, Math.max(1, columns - 2), "line", now).map((line) => [{ text: "  " }, ...line]));
 
   let body;
   const shapes = columns < MIN_CARD_WIDTH ? ["line"] : ["full", "tight", "line"];
@@ -425,7 +479,41 @@ export function renderPanel(states, { columns = 80, rows, intervalS = 15, now = 
     body = candidate;
     if (rows === undefined || candidate.length + header.length + 1 <= rows) break;
   }
-  const lines = [...header, [], ...body];
+  return { header: [...header, []], body };
+}
+
+/**
+ * Fit a pinned header and a body to the pane. A body taller than the pane
+ * scrolls, and the last header line with text says how much is out of sight.
+ * @returns {{text: string, maxScroll: number, scroll: number}}
+ */
+export function composeFrame({ header, body }, { columns = 80, rows, scroll = 0, depth = "none", theme = "dark", footer = [] } = {}) {
+  const view = rows === undefined ? body.length : Math.max(1, rows - header.length);
+  const maxScroll = Math.max(0, body.length - view);
+  const top = Math.min(Math.max(0, scroll), maxScroll);
+  let head = header;
+  if (maxScroll > 0) {
+    const marks = [top > 0 ? `↑${top}` : "", top < maxScroll ? `↓${maxScroll - top}` : ""].filter(Boolean).join(" ");
+    const suffix = ` · ${marks}`;
+    const at = header.findLastIndex((line) => line.length > 0);
+    if (at >= 0) {
+      const text = header[at].map((seg) => seg.text).join("");
+      const room = Math.max(0, columns - width(suffix));
+      // Counts of zero go first, then the name, so the numbers that matter stay whole.
+      const noZeros = text.replace(/(?<= )0 (free|busy|saturated|stale)( · )?/g, "").replace(/ · $/, "");
+      const short = width(noZeros) <= room ? noZeros : noZeros.replace("resource-monitor-axi · ", "");
+      head = header.with(at, [{ text: `${width(text) <= room ? text : fit(short, room)}${suffix}`, style: "dim" }]);
+    }
+  }
+  const lines = [...head, ...body.slice(top, top + view)];
   const limited = rows === undefined ? lines : lines.slice(0, rows);
-  return limited.map((line) => paint(trimRight(line), { depth, theme })).join("\n");
+  // The key stays on the pane's very last rows, however little the body fills.
+  const padding = rows === undefined || !footer.length ? [] : Array.from({ length: Math.max(0, rows - limited.length) }, () => []);
+  const all = [...limited, ...padding, ...footer];
+  return { text: all.map((line) => paint(trimRight(line), { depth, theme })).join("\n"), maxScroll, scroll: top };
+}
+
+/** Render the card panel for `states`, sized to `columns` x `rows` (rows optional). */
+export function renderPanel(states, { columns = 80, rows, intervalS = 15, now = Date.now(), depth = "none", theme = "dark", scroll = 0 } = {}) {
+  return composeFrame(cardsFrame(states, { columns, rows, intervalS, now }), { columns, rows, scroll, depth, theme }).text;
 }
