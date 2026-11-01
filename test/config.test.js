@@ -65,3 +65,27 @@ test("the interval floor is 3 s and the window defaults to 1h", () => {
     unlinkSync(tmp);
   }
 });
+
+test("this machine is on by default, configurable, and a config can have only it", () => {
+  const tmp = join(tmpdir(), `resource-monitor-axi-cfg-local-${Date.now()}.json`);
+  const write = (json) => writeFileSync(tmp, JSON.stringify(json));
+  try {
+    write({ hosts: ["a"] });
+    assert.equal(loadConfig(tmp).local.simCeiling, 2);
+    write({ hosts: [], local: { label: "laptop", simCeiling: 3 } });
+    assert.deepEqual(loadConfig(tmp).local, { name: "laptop", simCeiling: 3 });
+    assert.deepEqual(loadConfig(tmp).hosts, []);
+    write({});
+    assert.deepEqual(loadConfig(tmp).hosts, []);
+    write({ hosts: ["a"], local: false });
+    assert.equal(loadConfig(tmp).local, null);
+    write({ hosts: [], local: false });
+    assert.throws(() => loadConfig(tmp), /nothing to monitor/);
+    write({ hosts: "a" });
+    assert.throws(() => loadConfig(tmp), /array/);
+    write({ local: "yes" });
+    assert.throws(() => loadConfig(tmp), /local/);
+  } finally {
+    unlinkSync(tmp);
+  }
+});

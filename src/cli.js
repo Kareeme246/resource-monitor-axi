@@ -3,9 +3,9 @@ import { AxiError, runAxiCli } from "axi-sdk-js";
 import { encode } from "@toon-format/toon";
 import { gapMsFor, nextInCycle, renderFrame } from "./charts.js";
 import { DEFAULT_INTERVAL_S, DEFAULT_WINDOW, INTERVALS, MIN_INTERVAL_S, WINDOWS, configPath, loadConfig, writeDefaultConfig } from "./config.js";
-import { addRecord, historyPath, loadHistory, recordOf } from "./history.js";
+import { LOCAL_ID, addRecord, historyPath, loadHistory, recordOf } from "./history.js";
 import { detectColorDepth } from "./render.js";
-import { closeConnections, sampleHost } from "./ssh.js";
+import { closeConnections, sampleHost, sampleLocal } from "./ssh.js";
 import { THRESHOLDS, verdict } from "./verdict.js";
 
 const PACKAGE = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
@@ -19,18 +19,18 @@ description: ${DESCRIPTION}
 commands[3]:
   (none)=snapshot, init, update
 output:
-  Default TOON snapshot, one row per host with a verdict (free, busy, saturated) from cpu and gpu load, and simsFree for how many more simulators fit, plus count, summary and total simsFree. A host that cannot be reached goes under unreachable and never stops the others.
+  Default TOON snapshot, one row per host with a verdict (free, busy, saturated) from cpu and gpu load, and simsFree for how many more simulators fit. This machine is sampled without ssh and reported apart under local, with the same fields. count, summary and total simsFree cover the remote hosts only. A host that cannot be reached goes under unreachable and never stops the others.
   --fields <a,b,c> picks columns and --full shows all of them: ${ALL_FIELDS.join(",")}. --json prints every field as JSON unless --fields narrows it.
 flags[11]:
   --fields <a,b,c>, --full, --json, --config <file>, --tui, --once, --view <charts|cards>, --interval <seconds>, --theme <light|dark>, --help, --version
 tui:
   --tui draws the live panel for people and needs a terminal. --once prints one frame, for any output.
-  Keys, also shown along its bottom: v charts or cards, w chart window, i sample interval, j k or arrows scroll, space or page keys scroll a page, g G top and bottom, q quit.
+  Keys, also shown along its bottom: v this machine or the servers, c charts or cards, w chart window, i sample interval, j k or arrows scroll, space or page keys scroll a page, g G top and bottom, q quit.
   It keeps 24 hours of readings per host in a small local file. --view, --interval, --theme and --once need --tui.
 config:
   ${configPath()}
-  {"hosts":["build-box.local",{"host":"mini","label":"Mac mini"}],"interval":15,"window":"${DEFAULT_WINDOW}"}
-  Hosts are ~/.ssh/config aliases. interval is seconds between samples per host (default ${DEFAULT_INTERVAL_S}, minimum ${MIN_INTERVAL_S}). window is the chart span that opens first (${WINDOWS.map((w) => w.label).join(", ")}; default ${DEFAULT_WINDOW}). resource-monitor-axi init writes a starter file.
+  {"hosts":["build-box.local",{"host":"mini","label":"Mac mini"}],"local":{"label":"laptop","simCeiling":2},"interval":15,"window":"${DEFAULT_WINDOW}"}
+  Hosts are ~/.ssh/config aliases, and may be left out to watch only this machine. "local":false stops sampling this machine. interval is seconds between samples per host (default ${DEFAULT_INTERVAL_S}, minimum ${MIN_INTERVAL_S}). window is the chart span that opens first (${WINDOWS.map((w) => w.label).join(", ")}; default ${DEFAULT_WINDOW}). resource-monitor-axi init writes a starter file.
 notes:
   Samples ride one reused ssh connection per host and run stock tools, and never prompt. Nothing is installed on or left running on a host. RESOURCE_MONITOR_AXI_SSH_CONFIG=<file> points ssh at another config file.
 examples:
@@ -103,11 +103,20 @@ const initialState = ({ host, label, simCeiling }) => ({
   simCeiling: simCeiling ?? THRESHOLDS.simCeiling,
 });
 
+/** This machine as one more host: same charts, history and verdict, sampled without ssh. */
+const localState = ({ name, simCeiling }) => ({
+  host: LOCAL_ID,
+  local: true,
+  name,
+  label: `${name} (local)`,
+  simCeiling,
+});
+
 /** CPU is smoothed over the last few readings: one 1s window swings 20% to 90% on this kind of work. */
 const CPU_WINDOW = 3;
 
 /** One sample attempt; failure keeps the previous reading as the stale body. */
-export async function refresh(state, sample = sampleHost) {
+export async function refresh(state, sample = state.local ? sampleLocal : sampleHost) {
   try {
     const next = await sample(state.host);
     if (next.cpuPct !== undefined) {
@@ -128,7 +137,7 @@ export async function refresh(state, sample = sampleHost) {
 
 export function snapshotData(states, now = Date.now()) {
   const hosts = states.map((st) => {
-    const row = { host: st.label, status: st.error ? "unreachable" : st.sample ? "ok" : "waiting" };
+    const row = { host: st.name ?? st.label, status: st.error ? "unreachable" : st.sample ? "ok" : "waiting" };
     if (st.sample && !st.error) {
       const simCeiling = st.simCeiling ?? st.sample.simCeiling ?? THRESHOLDS.simCeiling;
       const v = verdict({ ...st.sample, simCeiling });
@@ -168,19 +177,22 @@ function aggregates(hosts) {
 
 const pick = (row, fields) => Object.fromEntries(fields.map((f) => [f, row[f] ?? null]));
 
-function snapshotOutput(states, { json, full, fields }) {
-  const hosts = snapshotData(states);
+function snapshotOutput(remotes, local, { json, full, fields }) {
+  const hosts = snapshotData(remotes);
   const ok = hosts.filter((h) => h.status === "ok");
   const down = hosts.filter((h) => h.status !== "ok");
   const columns = fields ?? (full || json ? ALL_FIELDS : FIELDS);
-  const doc = {
-    generatedAt: new Date().toISOString(),
-    ...aggregates(hosts),
-    hosts: ok.map((h) => pick(h, columns)),
-  };
+  const doc = { generatedAt: new Date().toISOString() };
+  if (local) {
+    const [row] = snapshotData([local]);
+    doc.local = row.status === "ok" ? pick(row, columns) : { host: row.host, status: row.status, error: row.error };
+  }
+  // The counts below are the remote hosts only; this machine speaks for itself above.
+  Object.assign(doc, aggregates(hosts), { hosts: ok.map((h) => pick(h, columns)) });
   if (down.length) doc.unreachable = down.map((h) => ({ host: h.host, error: h.error, lastReadingAgeS: h.lastReadingAgeS ?? null }));
   if (json) return JSON.stringify(doc, null, 2);
   doc.help = [
+    ...(hosts.length ? [] : [`No remote hosts configured; add ssh aliases to "hosts" in ${configPath()}`]),
     ...(fields || full ? [] : ["Run `resource-monitor-axi --full` for every metric, or --fields <a,b,c> to pick them"]),
     ...(down.length ? ["Run `ssh <host> true` to check an unreachable host"] : []),
     `Simulator ceiling is per host in ${configPath()} (default ${THRESHOLDS.simCeiling})`,
@@ -218,8 +230,14 @@ const SCROLL_KEYS = {
 
 /** Apply one key to the view state. Returns true when it should repaint. */
 export function applyKey(key, ui, { page = 10, maxScroll = 0 } = {}) {
-  if (key === "v") {
+  if (key === "c") {
     ui.view = ui.view === "charts" ? "cards" : "charts";
+    ui.scroll = 0;
+    return true;
+  }
+  if (key === "v") {
+    if (!ui.canToggle) return false;
+    ui.scope = ui.scope === "local" ? "servers" : "local";
     ui.scroll = 0;
     return true;
   }
@@ -243,11 +261,13 @@ const ENTER_SCREEN = "\x1b[?1049h\x1b[?25l";
 const LEAVE_SCREEN = "\x1b[?25h\x1b[?1049l";
 const CLEAR = "\x1b[H\x1b[2J";
 
-async function panel(states, { theme, depth, ui }) {
+async function panel(remotes, local, { theme, depth, ui }) {
+  const states = [...remotes, ...(local ? [local] : [])];
   const out = process.stdout;
   let last = { maxScroll: 0 };
   const frame = () =>
-    renderFrame(states, {
+    renderFrame(ui.scope === "local" ? [local] : remotes, {
+      toggle: ui.canToggle ? (ui.scope === "local" ? "servers" : "local") : undefined,
       view: ui.view,
       windowS: ui.windowS,
       scroll: ui.scroll,
@@ -344,22 +364,26 @@ async function run(argv) {
   const config = loadConfig(flags.config);
   const intervalS = parseInterval(flags.interval, config.intervalS);
   const windowS = WINDOWS.find((w) => w.label === config.window).seconds;
-  const states = config.hosts.map(initialState);
+  const remotes = config.hosts.map(initialState);
+  const local = config.local ? localState(config.local) : null;
+  const states = [...remotes, ...(local ? [local] : [])];
   const hostNames = config.hosts.map((h) => h.host);
   if (flags.tui) for (const state of states) hydrate(state, intervalS);
 
+  // The panel opens on the servers, or on this machine when there are none.
+  const scope = remotes.length ? "servers" : "local";
   try {
     if (flags.tui && !flags.once) {
-      const ui = { view, windowS, intervalS, scroll: 0 };
-      await panel(states, { theme, depth: detectColorDepth(process.env, process.stdout.isTTY), ui });
+      const ui = { view, windowS, intervalS, scroll: 0, scope, canToggle: Boolean(local && remotes.length) };
+      await panel(remotes, local, { theme, depth: detectColorDepth(process.env, process.stdout.isTTY), ui });
       return "";
     }
     await Promise.all(states.map((st) => refresh(st)));
     if (flags.tui) {
       const depth = detectColorDepth(process.env, process.stdout.isTTY);
-      return renderFrame(states, { view, windowS, columns: process.stdout.columns || 100, intervalS, depth, theme }).text;
+      return renderFrame(scope === "local" ? [local] : remotes, { view, windowS, columns: process.stdout.columns || 100, intervalS, depth, theme }).text;
     }
-    return snapshotOutput(states, { json: flags.json, full: flags.full, fields });
+    return snapshotOutput(remotes, local, { json: flags.json, full: flags.full, fields });
   } finally {
     // A one-shot or quit panel should not leave ssh masters behind.
     await closeConnections(hostNames);

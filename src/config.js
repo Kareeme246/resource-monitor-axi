@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { dirname, join } from "node:path";
 
 export const DEFAULT_HOSTS = ["build-box.local"];
@@ -23,9 +23,25 @@ export function configPath(env = process.env) {
   return env.RESOURCE_MONITOR_AXI_CONFIG || join(base, "resource-monitor-axi", "config.json");
 }
 
+/** This machine's own entry: on unless `local` is false, with an optional label and ceiling. */
+function localEntry(raw, path) {
+  if (raw === false) return null;
+  if (raw !== undefined && raw !== true && (typeof raw !== "object" || raw === null || Array.isArray(raw))) {
+    throw new Error(`${path}: "local" must be false or {label, simCeiling}`);
+  }
+  const entry = raw === true || raw === undefined ? {} : raw;
+  const simCeiling = entry.simCeiling ?? DEFAULT_SIM_CEILING;
+  if (!Number.isInteger(simCeiling) || simCeiling < 1) {
+    throw new Error(`${path}: "simCeiling" for local must be a positive integer`);
+  }
+  return { name: entry.label || hostname().replace(/\.local$/, ""), simCeiling };
+}
+
 /**
  * Hosts are ~/.ssh/config aliases. Each entry is a string or `{host, label, simCeiling}`;
  * `label` only changes the card title; `simCeiling` is the simulator ceiling (default 2).
+ * `hosts` may be left out or empty when only this machine matters, and `local`
+ * configures this machine, which is sampled without ssh.
  * `interval` is seconds between samples and `window` the chart span that opens
  * first (15m, 1h, 6h or 24h). A missing file means the defaults.
  */
@@ -35,6 +51,7 @@ export function loadConfig(path = configPath()) {
       hosts: DEFAULT_HOSTS.map((host) => ({ host, label: host, simCeiling: DEFAULT_SIM_CEILING })),
       intervalS: DEFAULT_INTERVAL_S,
       window: DEFAULT_WINDOW,
+      local: localEntry(undefined, path),
     };
   }
   let json;
@@ -43,10 +60,11 @@ export function loadConfig(path = configPath()) {
   } catch (error) {
     throw new Error(`cannot read ${path}: ${error.message}`);
   }
-  if (!Array.isArray(json.hosts) || json.hosts.length === 0) {
-    throw new Error(`${path} needs a non-empty "hosts" array`);
-  }
-  const hosts = json.hosts.map((entry) => {
+  const rawHosts = json.hosts ?? [];
+  if (!Array.isArray(rawHosts)) throw new Error(`${path}: "hosts" must be an array`);
+  const local = localEntry(json.local, path);
+  if (rawHosts.length === 0 && !local) throw new Error(`${path} has nothing to monitor: add "hosts" or remove "local": false`);
+  const hosts = rawHosts.map((entry) => {
     const host = typeof entry === "string" ? entry : entry?.host;
     if (typeof host !== "string" || host === "") {
       throw new Error(`${path}: every host needs an ssh alias`);
@@ -67,7 +85,7 @@ export function loadConfig(path = configPath()) {
   if (!WINDOWS.some((w) => w.label === window)) {
     throw new Error(`${path}: "window" must be one of ${WINDOWS.map((w) => w.label).join(", ")}`);
   }
-  return { hosts, intervalS: interval, window };
+  return { hosts, intervalS: interval, window, local };
 }
 
 export function writeDefaultConfig(path = configPath()) {

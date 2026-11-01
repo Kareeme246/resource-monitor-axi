@@ -161,10 +161,10 @@ test("a metric the host cannot read has no box", () => {
 });
 
 test("a key of every shortcut stays on the bottom rows, naming what w and i change to next", () => {
-  const frame = renderFrame([live], { columns: 120, rows: 40, now: NOW, keys: true, intervalS: 15, windowS: 3600 });
+  const frame = renderFrame([live], { columns: 120, rows: 40, now: NOW, keys: true, intervalS: 15, windowS: 3600, toggle: "local" });
   const lines = frame.text.split("\n");
   assert.equal(lines.length, 40);
-  assert.match(lines.at(-1), /v cards {2}w window 1h → 6h {2}i every 15s → 30s {2}j k scroll {2}space page {2}g G top\/end {2}q quit/);
+  assert.match(lines.at(-1), /v local {2}c cards {2}w window 1h → 6h {2}i every 15s → 30s {2}j k scroll {2}space page {2}g G top\/end {2}q quit/);
   const narrow = renderFrame([live], { columns: 36, rows: 40, now: NOW, keys: true }).text.split("\n");
   assert.equal(narrow.length, 40);
   assert.equal(longest(narrow.join("\n")) <= 36, true);
@@ -172,7 +172,8 @@ test("a key of every shortcut stays on the bottom rows, naming what w and i chan
   assert.match(flat, /q quit/);
   assert.match(flat, /w window 1h → 6h/);
   const cards = renderFrame([live], { view: "cards", columns: 120, rows: 40, now: NOW, keys: true }).text;
-  assert.match(cards, /v charts/);
+  assert.match(cards, /c charts/);
+  assert.doesNotMatch(cards, /\bv /, "no toggle key when there is nothing to toggle to");
   assert.doesNotMatch(cards, /w window/);
   assert.equal(renderFrame([live], { columns: 50, rows: 9, now: NOW, keys: true }).text.includes("q quit"), false, "a tiny pane keeps its room for data");
   assert.equal(renderFrame([live], { columns: 50, now: NOW }).text.includes("q quit"), false, "no key without a live panel");

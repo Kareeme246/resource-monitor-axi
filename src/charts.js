@@ -394,12 +394,13 @@ export function chartsFrame(states, { columns = 80, rows, intervalS = 15, window
 export const nextInCycle = (cycle, current) => cycle.find((value) => value > current) ?? cycle[0];
 
 /** The key of every shortcut, showing what `w` and `i` would change to next. */
-function keyFooter(view, { columns, intervalS, windowS }) {
+function keyFooter(view, { columns, intervalS, windowS, toggle }) {
   const labelOf = (seconds) => WINDOWS.find((x) => x.seconds === seconds)?.label ?? `${seconds}s`;
   const nextWindow = nextInCycle(WINDOWS.map((x) => x.seconds), windowS);
   const nextInterval = nextInCycle(INTERVALS, intervalS);
   const keys = [
-    ["v", view === "charts" ? "cards" : "charts"],
+    ...(toggle ? [["v", toggle]] : []),
+    ["c", view === "charts" ? "cards" : "charts"],
     ...(view === "charts" ? [["w", `window ${labelOf(windowS)} → ${labelOf(nextWindow)}`]] : []),
     ["i", `every ${intervalS}s → ${nextInterval}s`],
     ["j k", "scroll"],
@@ -416,11 +417,12 @@ const MIN_BODY_FOR_KEY = 8;
 
 /**
  * One frame of either view. A chart view that cannot fit falls back to cards.
- * `keys` adds the pinned key of shortcuts, for a panel that is taking input.
+ * `keys` adds the pinned key of shortcuts, for a panel that is taking input, and
+ * `toggle` names what `v` would switch to, when there is anything to switch to.
  * @returns {{text: string, maxScroll: number, scroll: number}}
  */
-export function renderFrame(states, { view = "charts", columns = 80, rows, intervalS = 15, windowS = 3600, now = Date.now(), depth = "none", theme = "dark", scroll = 0, keys = false } = {}) {
-  let footer = keys ? keyFooter(view, { columns, intervalS, windowS }) : [];
+export function renderFrame(states, { view = "charts", columns = 80, rows, intervalS = 15, windowS = 3600, now = Date.now(), depth = "none", theme = "dark", scroll = 0, keys = false, toggle } = {}) {
+  let footer = keys ? keyFooter(view, { columns, intervalS, windowS, toggle }) : [];
   if (rows !== undefined && rows - footer.length < MIN_BODY_FOR_KEY) footer = [];
   const room = rows === undefined ? undefined : rows - footer.length;
   const charts = view === "charts" ? chartsFrame(states, { columns, rows: room, intervalS, windowS, now }) : null;

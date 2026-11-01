@@ -6,7 +6,7 @@ live panel for people, built to run in a second terminal, stacked above or below
 borrows its look: rounded text boxes, muted labels, a dim status header.
 
 ```
-  resource-monitor-axi · 15s · 1h · v cards
+  resource-monitor-axi · 15s · 1h
   0 free · 1 busy · 0 saturated · 0 stale
 
 ● build-box.local · M5 Mac
@@ -44,8 +44,10 @@ resource-monitor-axi init                  # write a starter config
 resource-monitor-axi update                # upgrade from npm (--check only reports)
 ```
 
-The snapshot leads with `count`, a `summary` such as `0 free, 1 busy, 0 saturated,
-0 unreachable` and the total `simsFree`. Rows default to `host,verdict,simsFree,reason`.
+The snapshot reports this machine apart under `local`, with the same fields as a host row.
+`count`, a `summary` such as `0 free, 1 busy, 0 saturated, 0 unreachable` and the total
+`simsFree` cover the remote hosts only, because they answer how much room the servers have.
+With no remote hosts they are zero, `hosts: []` says so, and `help` says what to add. Rows default to `host,verdict,simsFree,reason`.
 Unreachable hosts are listed apart with their reason and never stop the others. Errors
 are structured, on stdout: exit 1 for a failure, exit 2 for a bad command or flag. Nothing
 ever prompts, and `--tui` without a terminal fails instead of hanging.
@@ -60,7 +62,8 @@ They last until you quit; to change what it opens with, use the config.
 
 | Key | Does |
 | --- | --- |
-| `v` | switch between charts and cards |
+| `v` | switch between this machine and the servers |
+| `c` | switch between charts and cards |
 | `w` | cycle the chart window: 15m, 1h, 6h, 24h |
 | `i` | cycle the sample interval: 3, 5, 15, 30, 60 s |
 | `j` `k`, arrows | scroll a line |
@@ -83,10 +86,15 @@ start, so restart the panel after editing it.
     { "host": "build-box", "label": "Build box", "simCeiling": 4 },
     "linux-server"
   ],
+  "local": { "label": "laptop", "simCeiling": 2 },
   "interval": 15,
   "window": "1h"
 }
 ```
+
+This machine is monitored too, without ssh. `local` sets its label and simulator ceiling,
+and `"local": false` stops sampling it. `hosts` may be left out or empty to watch only this
+machine.
 
 Hosts are `~/.ssh/config` aliases, so keys, users, jump hosts and ports are
 whatever ssh already knows. Each entry is an alias string or `{host, label, simCeiling}`;
@@ -95,6 +103,14 @@ host (default 2). `interval` is the seconds between samples of each host: defaul
 minimum 3. `window` is the chart span the panel opens on: `15m`, `1h` (default), `6h`
 or `24h`. Hosts are sampled independently, a host is never polled before its interval
 has passed, and a slow host does not delay the others.
+
+### This machine and the servers
+
+The panel samples this machine and every server all the time, so `v` switches between them
+at once with their charts already drawn. It opens on the servers, or on this machine when
+none are configured, and `v` then has nothing to switch to and leaves the key. Each view's
+header counts only what it shows. This machine reads the same `sh` script as a host, piped
+to `sh -s` with no ssh, and keeps its history in `_local.jsonl`.
 
 ### History
 

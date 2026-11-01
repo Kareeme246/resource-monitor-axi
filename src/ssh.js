@@ -74,8 +74,17 @@ export async function sampleHost(host, options = {}) {
 
 /** One ssh round trip; resolves to a sample or rejects with a short reason. */
 function sampleOnce(host, options) {
+  return runScript("ssh", sshArgs(host, options), options);
+}
+
+/** This machine, through the same script and parser as any host, with no ssh. */
+export function sampleLocal(_host, options = {}) {
+  return runScript("sh", ["-s"], options);
+}
+
+function runScript(command, args, options) {
   return new Promise((resolve, reject) => {
-    const child = spawn("ssh", sshArgs(host, options), { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => {
@@ -86,7 +95,7 @@ function sampleOnce(host, options) {
     child.stderr.on("data", (chunk) => (stderr += chunk));
     child.on("error", (error) => {
       clearTimeout(timer);
-      reject(new Error(error.code === "ENOENT" ? "ssh not found" : error.message));
+      reject(new Error(error.code === "ENOENT" ? `${command} not found` : error.message));
     });
     child.on("close", (code) => {
       clearTimeout(timer);

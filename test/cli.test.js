@@ -28,7 +28,7 @@ esac
   { mode: 0o755 },
 );
 const config = join(dir, "config.json");
-writeFileSync(config, JSON.stringify({ hosts: ["good", "bad"] }));
+writeFileSync(config, JSON.stringify({ hosts: ["good", "bad"], local: false }));
 
 const cli = (...args) => {
   const r = spawnSync(process.execPath, [BIN, ...args], {
@@ -92,7 +92,7 @@ test("--tui --once prints a frame without a terminal, and help comes per command
 
 test("a connection that drops without a reason recovers, and if it does not, says so plainly", () => {
   const hosts = join(dir, "blip.json");
-  writeFileSync(hosts, JSON.stringify({ hosts: ["blip", "silent"] }));
+  writeFileSync(hosts, JSON.stringify({ hosts: ["blip", "silent"], local: false }));
   const doc = JSON.parse(cli("--config", hosts, "--json").out);
   assert.deepEqual(doc.hosts.map((h) => h.host), ["blip"], "one dropped connection is not a host going away");
   assert.equal(doc.unreachable[0].error, "connection lost");
@@ -103,4 +103,30 @@ test("the example config is valid and the package ships it", async () => {
   const { loadConfig } = await import("../src/config.js");
   const example = fileURLToPath(new URL("../config.example.json", import.meta.url));
   assert.equal(loadConfig(example).hosts.length, 3);
+});
+
+// These run the real script on this machine. A stand-in sh is not possible: it is sh.
+test("this machine is reported apart, with no ssh, and stays out of the remote counts", () => {
+  const both = join(dir, "both.json");
+  writeFileSync(both, JSON.stringify({ hosts: ["bad"], local: { label: "laptop" } }));
+  const doc = JSON.parse(cli("--config", both, "--json").out);
+  assert.equal(doc.local.host, "laptop");
+  assert.ok(["free", "busy", "saturated"].includes(doc.local.verdict));
+  assert.equal(typeof doc.local.cores, "number");
+  assert.equal(doc.count, 1);
+  assert.match(doc.summary, /^0 free, 0 busy, 0 saturated, 1 unreachable$/, "no remote reachable leaves this machine reporting");
+  const toon = cli("--config", both).out;
+  assert.match(toon, /local:\n {2}host: laptop\n {2}verdict: /);
+  assert.match(toon, /hosts: \[\]/);
+});
+
+test("a config with no remote hosts says so, and the panel frame shows this machine", () => {
+  const solo = join(dir, "solo.json");
+  writeFileSync(solo, JSON.stringify({ local: { label: "laptop" } }));
+  const r = cli("--config", solo);
+  assert.equal(r.code, 0);
+  assert.match(r.out, /count: 0/);
+  assert.match(r.out, /hosts: \[\]/);
+  assert.match(r.out, /No remote hosts configured/);
+  assert.match(cli("--config", solo, "--tui", "--once").out, /● laptop \(local\) · /);
 });

@@ -81,12 +81,20 @@ async function inTemp2(fn) {
   }
 }
 
-test("v switches views, w cycles windows, and scrolling stays in range", () => {
-  const ui = { view: "charts", windowS: 3600, scroll: 4 };
-  applyKey("v", ui);
+test("c switches views, v switches between this machine and the servers, w cycles windows, and scrolling stays in range", () => {
+  const ui = { view: "charts", windowS: 3600, scroll: 4, scope: "servers", canToggle: true };
+  applyKey("c", ui);
   assert.deepEqual([ui.view, ui.scroll], ["cards", 0]);
-  applyKey("v", ui);
+  applyKey("c", ui);
   assert.equal(ui.view, "charts");
+  ui.scroll = 4;
+  assert.equal(applyKey("v", ui), true);
+  assert.deepEqual([ui.scope, ui.view, ui.scroll], ["local", "charts", 0]);
+  applyKey("v", ui);
+  assert.equal(ui.scope, "servers");
+  ui.canToggle = false;
+  assert.equal(applyKey("v", ui), false, "nothing to switch to");
+  assert.equal(ui.scope, "servers");
   const seen = [];
   for (let i = 0; i < 4; i++) {
     applyKey("w", ui);

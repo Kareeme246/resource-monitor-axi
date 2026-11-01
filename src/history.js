@@ -21,6 +21,9 @@ export function historyPath(host, env = process.env) {
   return join(historyDir(env), `${encodeURIComponent(host)}.jsonl`);
 }
 
+/** This machine's history file; the underscore keeps it clear of any ssh alias in practice. */
+export const LOCAL_ID = "_local";
+
 /** The chart values of one sample. CPU is the raw reading, not the smoothed title number. */
 export function recordOf(sample, t) {
   const rec = { t };
