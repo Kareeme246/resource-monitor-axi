@@ -8,14 +8,7 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "devEngines": {
-    "packageManager": {
-      "name": "pnpm",
-      "version": "12.16.1",
-      "onFail": "download"
-    }
-  },
-  "packageManager": "pnpm@12.16.1",
+  "packageManager": "pnpm@12.5.1",
   "type": "module",
   "dependencies": {
     "@toon-format/toon": "^4.4.0"

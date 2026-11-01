@@ -2,8 +2,8 @@
  * Spare-capacity verdict for one host. Plain thresholds, no scoring model.
  *
  * Measured on build-box.local (M4 Pro, 14 cores, 24 GB): see README "Where the
- * thresholds come from". The simulator ceiling is the one number that was
- * known up front: two booted simulators saturate Pro 16 whatever the CPU says.
+ * thresholds come from". The simulator ceiling defaults to 2 (the known ceiling
+ * on Pro 16) and can be configured per host.
  */
 export const THRESHOLDS = {
   simCeiling: 2,
@@ -41,9 +41,10 @@ export function verdict(sample, t = THRESHOLDS) {
     reasons.push(reason);
   };
 
+  const simCeiling = sample?.simCeiling ?? t.simCeiling ?? 2;
   const sims = sample.sims;
   if (sims !== undefined) {
-    if (sims >= t.simCeiling) raise(2, `${sims} sims, at the ceiling`);
+    if (sims >= simCeiling) raise(2, `${sims} sims, at the ceiling`);
     else if (sims > 0) raise(1, `${sims} sim${sims === 1 ? "" : "s"}`);
   }
   if (sample.xcodebuild > 0) raise(1, `${sample.xcodebuild} xcodebuild`);
@@ -67,6 +68,6 @@ export function verdict(sample, t = THRESHOLDS) {
   }
 
   const out = { level, label: LEVELS[level], reasons };
-  if (sims !== undefined) out.simsFree = Math.max(0, t.simCeiling - sims);
+  if (sims !== undefined) out.simsFree = Math.max(0, simCeiling - sims);
   return out;
 }

@@ -49,7 +49,11 @@ function parseInterval(value, fallback) {
   return seconds;
 }
 
-const initialState = ({ host, label }) => ({ host, label });
+const initialState = ({ host, label, simCeiling }) => ({
+  host,
+  label,
+  simCeiling: simCeiling ?? THRESHOLDS.simCeiling,
+});
 
 /** CPU is smoothed over the last few readings: one 1s window swings 20% to 90% on this kind of work. */
 const CPU_WINDOW = 3;
@@ -76,7 +80,8 @@ export function snapshotData(states, now = Date.now()) {
   const hosts = states.map((st) => {
     const row = { host: st.label, status: st.error ? "unreachable" : st.sample ? "ok" : "waiting" };
     if (st.sample && !st.error) {
-      const v = verdict(st.sample);
+      const simCeiling = st.simCeiling ?? st.sample.simCeiling ?? THRESHOLDS.simCeiling;
+      const v = verdict({ ...st.sample, simCeiling });
       const s = st.sample;
       Object.assign(row, {
         verdict: v.label,
@@ -89,6 +94,7 @@ export function snapshotData(states, now = Date.now()) {
         cores: s.cores ?? null,
         diskFreeGB: s.diskFreeGB ?? null,
         sims: s.sims ?? null,
+        simCeiling: s.sims !== undefined ? simCeiling : null,
         xcodebuild: s.xcodebuild ?? null,
         reason: v.reasons.join("; ") || (v.simsFree === undefined ? "spare capacity" : `room for ${v.simsFree} more sims`),
       });
@@ -114,7 +120,7 @@ function snapshotOutput(states, json) {
   };
   if (down.length) doc.unreachable = down.map((h) => ({ host: h.host, error: h.error }));
   doc.help = [
-    `simulator ceiling is ${THRESHOLDS.simCeiling} booted simulators; verdict thresholds live in the README`,
+    `simulator ceiling is configurable per host (default ${THRESHOLDS.simCeiling} booted simulators); verdict thresholds live in the README`,
     "Run `resource-monitor-axi --watch` for the live card panel",
   ];
   return encode(doc);

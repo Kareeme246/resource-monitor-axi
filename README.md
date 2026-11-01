@@ -31,7 +31,7 @@ free verdict also says how many more simulators fit ("room for 2 more sims").
 
 ```sh
 pnpm install
-pnpm link --global          # puts resource-monitor-axi on PATH (or run bin/resource-monitor-axi.js)
+pnpm add -g .               # puts resource-monitor-axi on PATH (or run bin/resource-monitor-axi.js)
 
 resource-monitor-axi                 # TOON snapshot, one row per host (agent mode)
 resource-monitor-axi --json          # same data as JSON
@@ -52,15 +52,20 @@ config file.
 
 ```json
 {
-  "hosts": ["build-box.local", { "host": "mini", "label": "Mac mini" }],
+  "hosts": [
+    "build-box.local",
+    { "host": "mini", "label": "Mac mini", "simCeiling": 2 }
+  ],
   "interval": 15
 }
 ```
 
 Hosts are `~/.ssh/config` aliases, so keys, users, jump hosts and ports are
-whatever ssh already knows. `interval` is the seconds between samples of each
-host: default 15, minimum 5. Hosts are sampled independently, a host is never
-polled before its interval has passed, and a slow host does not delay the others.
+whatever ssh already knows. Each entry is an alias string or `{host, label, simCeiling}`;
+`label` changes the card title and `simCeiling` sets the simulator ceiling for that
+host (default 2). `interval` is the seconds between samples of each host: default 15,
+minimum 5. Hosts are sampled independently, a host is never polled before its interval
+has passed, and a slow host does not delay the others.
 
 ## What it measures
 
@@ -92,7 +97,7 @@ The worst signal wins. Thresholds live in `src/verdict.js`.
 
 | Signal | busy | saturated |
 | --- | --- | --- |
-| booted simulators | 1 or more | 2 (the known ceiling on Pro 16) |
+| booted simulators | 1 or more | host ceiling (default 2) |
 | xcodebuild | 1 or more | |
 | cpu (3 reading average) | 40 % | 85 % |
 | 5 minute load per core | 1.0 | 6.0 |

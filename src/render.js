@@ -85,6 +85,7 @@ function paint(line, { depth = "none", theme = "dark" }) {
 
 const width = (text) => [...text].length;
 const fit = (text, w) => {
+  if (w <= 0) return "";
   const chars = [...text];
   return chars.length <= w ? text : `${chars.slice(0, Math.max(0, w - 1)).join("")}…`;
 };
@@ -129,15 +130,26 @@ function trimRight(line) {
 function titleLine(w, name, right, border) {
   let r = right ? ` ${right} ` : "";
   let dashes = w - 4 - width(name.text) - width(r);
+  if (dashes < 1 && right) {
+    const maxR = w - 5 - width(name.text) - 2;
+    if (maxR >= 3) {
+      r = ` ${fit(right, maxR)} `;
+      dashes = w - 4 - width(name.text) - width(r);
+    } else {
+      r = "";
+      dashes = w - 4 - width(name.text);
+    }
+  }
   if (dashes < 1) {
-    r = right ? ` ${fit(right, Math.max(0, w - 7 - width(name.text)))} ` : "";
-    dashes = Math.max(1, w - 4 - width(name.text) - width(r));
+    const maxName = Math.max(1, w - 5 - 4);
+    name = { ...name, text: ` ${name.text.trim().slice(0, 1)} ${fit(name.text.trim().slice(2), maxName)} ` };
+    dashes = Math.max(1, w - 4 - width(name.text));
   }
   return [
     { text: "╭─", style: border },
     name,
-    { text: "─".repeat(dashes), style: border },
-    { text: r, style: "dim" },
+    { text: "─".repeat(Math.max(1, dashes)), style: border },
+    ...(r ? [{ text: r, style: "dim" }] : []),
     { text: "─╮", style: border },
   ];
 }
@@ -157,15 +169,16 @@ function shortChip(chip) {
 function barRow(w, label, pct, { level = 0, text, detail = "", dim = false }) {
   // The dim detail column gives way first when the card gets narrow.
   const dw = w >= 44 ? 9 : w >= 36 ? 6 : 0;
-  const bar = Math.max(4, w - 2 - 3 - LABEL_WIDTH - 1 - 4 - 1 - dw - (dw ? 1 : 0));
   const pctText = text ?? (pct === undefined ? "?" : `${Math.min(999, Math.round(pct))}%`);
+  const tw = Math.max(4, pctText.length);
+  const bar = Math.max(4, w - 2 - 3 - LABEL_WIDTH - 1 - tw - 1 - dw - (dw ? 1 : 0));
   const style = dim ? "dimmer" : HEALTH[level];
   return [
     { text: "   " },
     { text: padEnd(label, LABEL_WIDTH), style: dim ? "dimmer" : "label" },
     ...thinBar(pct, bar, dim ? "dimmer" : style),
     { text: " " },
-    { text: pctText.padStart(4), style: pct === undefined && text === undefined ? "dim" : style },
+    { text: pctText.padStart(tw), style: pct === undefined && text === undefined ? "dim" : style },
     ...(dw
       ? [
           { text: " " },
@@ -184,8 +197,7 @@ function textRow(w, label, value, valueStyle = "dim", dim = false) {
 }
 
 /** The metric rows a sample supports, in a fixed order. */
-function metricRows(w, s, dim) {
-  const t = THRESHOLDS;
+function metricRows(w, s, dim, t = THRESHOLDS) {
   const rows = [];
   if (s.cpuPct !== undefined) {
     rows.push(barRow(w, "cpu", s.cpuPct, { level: usageLevel(s.cpuPct, t.cpu), dim }));
@@ -228,11 +240,12 @@ function metricRows(w, s, dim) {
     );
   }
   if (s.sims !== undefined) {
-    const ratio = (s.sims / t.simCeiling) * 100;
+    const simCeiling = s.simCeiling ?? t.simCeiling ?? 2;
+    const ratio = (s.sims / simCeiling) * 100;
     rows.push(
       barRow(w, "sims", ratio, {
-        level: s.sims >= t.simCeiling ? 2 : s.sims > 0 ? 1 : 0,
-        text: `${s.sims}/${t.simCeiling}`,
+        level: s.sims >= simCeiling ? 2 : s.sims > 0 ? 1 : 0,
+        text: `${s.sims}/${simCeiling}`,
         dim,
       }),
     );
@@ -275,7 +288,10 @@ export function ago(ms) {
 export function buildCard(state, w, shape, now) {
   const stale = Boolean(state.error) || !state.sample;
   const s = state.sample;
-  const v = s && !stale ? verdict(s) : undefined;
+  const simCeiling = state.simCeiling ?? s?.simCeiling ?? THRESHOLDS.simCeiling;
+  const t = { ...THRESHOLDS, simCeiling };
+  const sampleWithCeiling = s ? { ...s, simCeiling } : undefined;
+  const v = sampleWithCeiling && !stale ? verdict(sampleWithCeiling, t) : undefined;
   const name = state.label;
 
   if (shape === "line") return [lineCard(state, v, w, now)];
@@ -293,8 +309,10 @@ export function buildCard(state, w, shape, now) {
       : s.cores
         ? `${s.cores}c`
         : "";
+  const rWidth = right ? width(right) + 2 : 0;
+  const maxNameWidth = Math.max(4, w - 9 - rWidth);
   const nameSeg = {
-    text: ` ${dot} ${fit(name, Math.max(4, w - 8 - width(right)))} `,
+    text: ` ${dot} ${fit(name, maxNameWidth)} `,
     style: stale ? "dimBold" : "name",
   };
   const pad = shape === "full";
@@ -303,20 +321,21 @@ export function buildCard(state, w, shape, now) {
   if (pad) lines.push(row([]));
 
   if (stale) {
-    if (s) lines.push(...metricRows(w, s, true).map(row));
+    if (s) lines.push(...metricRows(w, sampleWithCeiling, true, t).map(row));
     const msg = state.error ?? "waiting for first reading";
     if (s) lines.push(row([]));
-    lines.push(row([{ text: `   ${fit(`● ${msg}`, w - 6)}`, style: state.error ? "crit" : "dim" }]));
+    lines.push(row([{ text: `   ${fit(`● ${msg}`, Math.max(0, w - 6))}`, style: state.error ? "crit" : "dim" }]));
+    const staleMsg = s ? `last reading ${ago(now - state.sampledAt)} ago, excluded from totals` : "no reading yet";
     lines.push(
       row([
         {
-          text: `   ${s ? `last reading ${ago(now - state.sampledAt)} ago, excluded from totals` : "no reading yet"}`,
+          text: `   ${fit(staleMsg, Math.max(0, w - 6))}`,
           style: "dimmer",
         },
       ]),
     );
   } else {
-    lines.push(...metricRows(w, s, false).map(row));
+    lines.push(...metricRows(w, sampleWithCeiling, false, t).map(row));
     if (pad) lines.push(row([]));
     lines.push(row(verdictRow(w, v, false)));
   }
@@ -330,18 +349,22 @@ function lineCard(state, v, w, now) {
   const stale = Boolean(state.error) || !s;
   const dim = stale;
   const bits = [];
+  const simCeiling = state.simCeiling ?? s?.simCeiling ?? THRESHOLDS.simCeiling;
   if (s?.cpuPct !== undefined) bits.push(`cpu ${s.cpuPct}%`);
   if (s?.memPct !== undefined) bits.push(`mem ${s.memPct}%`);
-  if (s?.sims !== undefined) bits.push(`${s.sims}/${THRESHOLDS.simCeiling} sims`);
+  if (s?.sims !== undefined) bits.push(`${s.sims}/${simCeiling} sims`);
   const status = stale ? (state.error ? "unreachable" : "waiting") : v.label;
   const style = stale ? "dimBold" : HEALTH_BOLD[v.level];
+  const lw = w >= 27 ? 14 : Math.max(4, Math.min(14, Math.floor((w - 2) / 2)));
+  const sw = w >= 27 ? 11 : Math.max(4, w - 2 - lw);
   const head = [
     { text: `${stale ? "○" : "●"} `, style },
-    { text: padEnd(fit(state.label, 14), 14), style: stale ? "dimBold" : "name" },
-    { text: padEnd(status, 11), style },
+    { text: padEnd(fit(state.label, lw), lw), style: stale ? "dimBold" : "name" },
+    { text: padEnd(fit(status, sw), sw), style },
   ];
   const tail = stale && s ? `stale ${ago(now - state.sampledAt)}` : bits.join(" · ");
-  return [...head, { text: fit(tail, Math.max(0, w - 27)), style: dim ? "dimmer" : "dim" }];
+  const tailWidth = Math.max(0, w - 2 - lw - sw);
+  return [...head, ...(tailWidth > 0 ? [{ text: fit(tail, tailWidth), style: dim ? "dimmer" : "dim" }] : [])];
 }
 
 function layout(cards, w, columns) {
@@ -382,7 +405,13 @@ function headerLines(states, v, intervalS, now, columns) {
  */
 export function renderPanel(states, { columns = 80, rows, intervalS = 15, now = Date.now(), depth = "none", theme = "dark" } = {}) {
   const w = Math.max(MIN_CARD_WIDTH, Math.min(CARD_WIDTH, columns));
-  const levels = states.map((st) => (st.sample && !st.error ? verdict(st.sample).level : undefined)).filter((l) => l !== undefined);
+  const levels = states
+    .map((st) => {
+      if (!st.sample || st.error) return undefined;
+      const simCeiling = st.simCeiling ?? st.sample.simCeiling ?? THRESHOLDS.simCeiling;
+      return verdict({ ...st.sample, simCeiling }).level;
+    })
+    .filter((l) => l !== undefined);
   const header = headerLines(states, levels, intervalS, now, columns).map((text) => [{ text: `  ${text}`, style: "dim" }]);
 
   const build = (shape) => layout(states.map((st) => buildCard(st, w, shape, now)), w, columns);
@@ -390,7 +419,8 @@ export function renderPanel(states, { columns = 80, rows, intervalS = 15, now = 
   const lineRows = () => states.map((st) => [{ text: "  " }, ...buildCard(st, columns - 2, "line", now)[0]]);
 
   let body;
-  for (const shape of ["full", "tight", "line"]) {
+  const shapes = columns < MIN_CARD_WIDTH ? ["line"] : ["full", "tight", "line"];
+  for (const shape of shapes) {
     const candidate = shape === "line" ? lineRows() : build(shape);
     body = candidate;
     if (rows === undefined || candidate.length + header.length + 1 <= rows) break;

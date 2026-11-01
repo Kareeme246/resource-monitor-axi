@@ -34,3 +34,17 @@ test("a Linux host has no simulator ceiling to report", () => {
   assert.equal(v.label, "free");
   assert.equal("simsFree" in v, false);
 });
+
+test("simulator ceiling can be configured per host", () => {
+  const v4 = verdict({ ...idle, sims: 2, simCeiling: 4 });
+  assert.equal(v4.label, "busy");
+  assert.equal(v4.simsFree, 2);
+
+  const v4Sat = verdict({ ...idle, sims: 4, simCeiling: 4 });
+  assert.equal(v4Sat.label, "saturated");
+  assert.equal(v4Sat.simsFree, 0);
+
+  const v1 = verdict({ ...idle, sims: 1, simCeiling: 1 });
+  assert.equal(v1.label, "saturated");
+  assert.equal(v1.simsFree, 0);
+});

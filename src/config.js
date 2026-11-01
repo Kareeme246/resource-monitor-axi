@@ -6,6 +6,7 @@ export const DEFAULT_HOSTS = ["build-box.local"];
 export const DEFAULT_INTERVAL_S = 15;
 /** A sample is a few commands over ssh; never poll a host faster than this. */
 export const MIN_INTERVAL_S = 5;
+export const DEFAULT_SIM_CEILING = 2;
 
 export function configPath(env = process.env) {
   const base = env.XDG_CONFIG_HOME || join(homedir(), ".config");
@@ -13,13 +14,16 @@ export function configPath(env = process.env) {
 }
 
 /**
- * Hosts are ~/.ssh/config aliases. Each entry is a string or `{host, label}`;
- * `label` only changes the card title. `interval` is seconds between samples.
- * A missing file means the default list.
+ * Hosts are ~/.ssh/config aliases. Each entry is a string or `{host, label, simCeiling}`;
+ * `label` only changes the card title; `simCeiling` is the simulator ceiling (default 2).
+ * `interval` is seconds between samples. A missing file means the default list.
  */
 export function loadConfig(path = configPath()) {
   if (!existsSync(path)) {
-    return { hosts: DEFAULT_HOSTS.map((host) => ({ host, label: host })), intervalS: DEFAULT_INTERVAL_S };
+    return {
+      hosts: DEFAULT_HOSTS.map((host) => ({ host, label: host, simCeiling: DEFAULT_SIM_CEILING })),
+      intervalS: DEFAULT_INTERVAL_S,
+    };
   }
   let json;
   try {
@@ -35,7 +39,13 @@ export function loadConfig(path = configPath()) {
     if (typeof host !== "string" || host === "") {
       throw new Error(`${path}: every host needs an ssh alias`);
     }
-    return { host, label: (typeof entry === "object" && entry.label) || host };
+    const label = (typeof entry === "object" && entry.label) || host;
+    const rawCeiling = typeof entry === "object" ? (entry.simCeiling ?? entry.simsCeiling) : undefined;
+    const simCeiling = rawCeiling ?? DEFAULT_SIM_CEILING;
+    if (typeof simCeiling !== "number" || !Number.isInteger(simCeiling) || simCeiling < 1) {
+      throw new Error(`${path}: "simCeiling" for ${host} must be a positive integer`);
+    }
+    return { host, label, simCeiling };
   });
   const interval = json.interval ?? DEFAULT_INTERVAL_S;
   if (typeof interval !== "number" || interval < MIN_INTERVAL_S) {

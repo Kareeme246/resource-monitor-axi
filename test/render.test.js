@@ -28,6 +28,24 @@ test("cards reflow into columns when the terminal is wide and a column when narr
 test("narrow terminals shrink the card instead of overflowing", () => {
   for (const columns of [30, 36, 45]) {
     assert.equal(width(renderPanel([live], { columns, now: 2000 })) <= columns, true, `columns ${columns}`);
+    assert.equal(width(renderPanel([stale], { columns, now: 31000 })) <= columns, true, `stale columns ${columns}`);
+  }
+});
+
+test("sims bar and verdict respect per-host simCeiling", () => {
+  const custom = { label: "mini", sample: { ...sample, sims: 2 }, simCeiling: 4 };
+  const out = renderPanel([custom], { columns: 60, now: 2000 });
+  assert.match(out, /2\/4/);
+  assert.match(out, /● busy/);
+});
+
+test("two configured hosts reflow cleanly when narrow and wide", () => {
+  const h1 = { label: "build-box.local", sample, simCeiling: 2 };
+  const h2 = { label: "mini", sample: { ...sample, sims: 2 }, simCeiling: 4 };
+
+  for (const columns of [25, 30, 35, 49, 60, 100, 120]) {
+    const rendered = renderPanel([h1, h2], { columns, now: 2000 });
+    assert.equal(width(rendered) <= columns, true, `columns ${columns} overflow: ${width(rendered)}`);
   }
 });
 
