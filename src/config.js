@@ -126,3 +126,83 @@ export function writeDefaultConfig(path = configPath()) {
   writeFileSync(path, DEFAULT_CONFIG_YAML);
   return true;
 }
+
+/**
+ * Append an alias to "hosts:" in the config file, creating the file if absent.
+ * Preserves comments and existing structure in YAML files.
+ * Adding an existing alias is a no-op that returns alreadyPresent: true.
+ */
+export function addHostToConfig(alias, path = configPath()) {
+  let effectivePath = path;
+  if (!existsSync(effectivePath)) {
+    const legacy = legacyConfigPath(effectivePath);
+    if (legacy !== effectivePath && existsSync(legacy)) {
+      effectivePath = legacy;
+    }
+  }
+
+  if (effectivePath.endsWith(".json")) {
+    let json;
+    try {
+      json = JSON.parse(readFileSync(effectivePath, "utf8"));
+    } catch (error) {
+      throw new Error(`cannot read ${effectivePath}: ${error.message}`);
+    }
+    if (json === null || typeof json !== "object" || Array.isArray(json)) json = {};
+    const hosts = json.hosts ?? [];
+    if (!Array.isArray(hosts)) throw new Error(`${effectivePath}: "hosts" must be an array`);
+    const exists = hosts.some((entry) => (typeof entry === "string" ? entry : entry?.host) === alias);
+    if (exists) {
+      return { added: false, alreadyPresent: true, path: effectivePath, created: false };
+    }
+    json.hosts = [...hosts, alias];
+    writeFileSync(effectivePath, JSON.stringify(json, null, 2) + "\n", "utf8");
+    return { added: true, alreadyPresent: false, path: effectivePath, created: false };
+  }
+
+  if (!existsSync(effectivePath)) {
+    mkdirSync(dirname(effectivePath), { recursive: true });
+    const doc = YAML.parseDocument(DEFAULT_CONFIG_YAML);
+    let hosts = doc.get("hosts");
+    if (hosts && typeof hosts === "object" && Array.isArray(hosts.items)) {
+      hosts.flow = false;
+      hosts.add(alias);
+    } else {
+      doc.set("hosts", [alias]);
+    }
+    writeFileSync(effectivePath, doc.toString(), "utf8");
+    return { added: true, alreadyPresent: false, path: effectivePath, created: true };
+  }
+
+  let doc;
+  try {
+    doc = YAML.parseDocument(readFileSync(effectivePath, "utf8"));
+  } catch (error) {
+    throw new Error(`cannot read ${effectivePath}: ${error.message}`);
+  }
+  if (doc.contents === null || doc.contents === undefined) {
+    doc.set("hosts", [alias]);
+    writeFileSync(effectivePath, doc.toString(), "utf8");
+    return { added: true, alreadyPresent: false, path: effectivePath, created: false };
+  }
+  let hosts = doc.get("hosts");
+  if (hosts === undefined || hosts === null) {
+    doc.set("hosts", [alias]);
+    writeFileSync(effectivePath, doc.toString(), "utf8");
+    return { added: true, alreadyPresent: false, path: effectivePath, created: false };
+  }
+  if (!hosts.items || !Array.isArray(hosts.items)) {
+    throw new Error(`${effectivePath}: "hosts" must be an array`);
+  }
+  const exists = hosts.items.some((item) => {
+    const val = item?.toJSON?.() ?? item;
+    return (typeof val === "string" ? val : val?.host) === alias;
+  });
+  if (exists) {
+    return { added: false, alreadyPresent: true, path: effectivePath, created: false };
+  }
+  hosts.flow = false;
+  hosts.add(alias);
+  writeFileSync(effectivePath, doc.toString(), "utf8");
+  return { added: true, alreadyPresent: false, path: effectivePath, created: false };
+}

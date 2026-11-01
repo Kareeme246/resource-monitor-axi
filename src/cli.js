@@ -2,10 +2,10 @@ import { readFileSync } from "node:fs";
 import { AxiError, runAxiCli } from "axi-sdk-js";
 import { encode } from "@toon-format/toon";
 import { gapMsFor, nextInCycle, renderFrame } from "./charts.js";
-import { DEFAULT_INTERVAL_S, DEFAULT_WINDOW, INTERVALS, MIN_INTERVAL_S, WINDOWS, configPath, loadConfig, writeDefaultConfig } from "./config.js";
+import { DEFAULT_INTERVAL_S, DEFAULT_WINDOW, INTERVALS, MIN_INTERVAL_S, WINDOWS, addHostToConfig, configPath, loadConfig, writeDefaultConfig } from "./config.js";
 import { LOCAL_ID, addRecord, historyPath, loadHistory, recordOf } from "./history.js";
 import { detectColorDepth, formatHeaderLine, formatQueryTime } from "./render.js";
-import { closeConnections, sampleHost, sampleLocal } from "./ssh.js";
+import { checkReachability, closeConnections, inspectSshHost, sampleHost, sampleLocal } from "./ssh.js";
 import { THRESHOLDS, verdict } from "./verdict.js";
 
 const PACKAGE = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
@@ -16,8 +16,8 @@ const ALL_FIELDS = [...FIELDS.slice(0, 3), "cpuPct", "memPct", "memPressure", "g
 
 const HELP = `usage: resource-monitor-axi [--tui] [flags]
 description: ${DESCRIPTION}
-commands[3]:
-  (none)=snapshot, init, update
+commands[4]:
+  (none)=snapshot, add, init, update
 output:
   Default TOON snapshot, one row per host with a verdict (free, busy, saturated) from cpu and gpu load, and simsFree for how many more simulators fit. This machine is sampled without ssh and reported apart under local, with the same fields. count, summary and total simsFree cover the remote hosts only. A host that cannot be reached goes under unreachable and never stops the others.
   --fields <a,b,c> picks columns and --full shows all of them: ${ALL_FIELDS.join(",")}. --json prints every field as JSON unless --fields narrows it.
@@ -36,7 +36,7 @@ config:
   local: { label: laptop, simCeiling: 2 }
   interval: 15
   window: ${DEFAULT_WINDOW}
-  Hosts are ~/.ssh/config aliases, and may be left out to watch only this machine. "local: false" stops sampling this machine. interval is seconds between samples per host (default ${DEFAULT_INTERVAL_S}, minimum ${MIN_INTERVAL_S}). window is the chart span that opens first (${WINDOWS.map((w) => w.label).join(", ")}; default ${DEFAULT_WINDOW}). resource-monitor-axi init writes a starter file.
+  Hosts are ~/.ssh/config aliases, and may be left out to watch only this machine. "local: false" stops sampling this machine. interval is seconds between samples per host (default ${DEFAULT_INTERVAL_S}, minimum ${MIN_INTERVAL_S}). window is the chart span that opens first (${WINDOWS.map((w) => w.label).join(", ")}; default ${DEFAULT_WINDOW}). resource-monitor-axi init writes a starter file, and resource-monitor-axi add <ssh-alias> appends a host.
 notes:
   Samples ride one reused ssh connection per host and run stock tools, and never prompt. Nothing is installed on or left running on a host. RESOURCE_MONITOR_AXI_SSH_CONFIG=<file> points ssh at another config file.
 examples:
@@ -45,11 +45,17 @@ examples:
   resource-monitor-axi --full
   resource-monitor-axi --tui
   resource-monitor-axi --tui --view cards --interval 30
+  resource-monitor-axi add build-box
   resource-monitor-axi update --check
 `;
 
 const INIT_HELP = `usage: resource-monitor-axi init
 description: Write a starter config file. Safe to repeat: an existing file is left alone.
+config: ${configPath()}
+`;
+
+const ADD_HELP = `usage: resource-monitor-axi add <ssh-alias>
+description: Append an ssh host alias to the config file. Checks reachability over ssh.
 config: ${configPath()}
 `;
 
@@ -206,7 +212,7 @@ function snapshotOutput(remotes, local, { json, full, fields }) {
   if (down.length) doc.unreachable = down.map((h) => ({ host: h.host, error: h.error, lastReadingAgeS: h.lastReadingAgeS ?? null }));
   if (json) return JSON.stringify(doc, null, 2);
   doc.help = [
-    ...(hosts.length ? [] : [`No remote hosts configured; add ssh aliases to "hosts" in ${configPath()}`]),
+    ...(hosts.length ? [] : [`No remote hosts configured; run \`resource-monitor-axi add <ssh-alias>\` or add ssh aliases to "hosts" in ${configPath()}`]),
     ...(fields || full ? [] : ["Run `resource-monitor-axi --full` for every metric, or --fields <a,b,c> to pick them"]),
     ...(down.length ? ["Run `ssh <host> true` to check an unreachable host"] : []),
     `Simulator ceiling is per host in ${configPath()} (default ${THRESHOLDS.simCeiling})`,
@@ -438,7 +444,74 @@ function init(argv) {
   if (argv.length) throw usage(`init takes no arguments, got ${argv[0]}`, "Set RESOURCE_MONITOR_AXI_CONFIG to choose another path");
   const path = configPath();
   const created = writeDefaultConfig(path);
-  return { config: path, status: created ? "created" : "already exists", help: [`Edit ${path} to list your ssh aliases`, "Run `resource-monitor-axi` for a snapshot"] };
+  return {
+    config: path,
+    status: created ? "created" : "already exists",
+    help: [
+      `Run \`resource-monitor-axi add <ssh-alias>\` or edit ${path} to list your ssh aliases`,
+      "Run `resource-monitor-axi` for a snapshot",
+    ],
+  };
+}
+
+async function add(argv) {
+  let config;
+  let json = false;
+  const positional = [];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--config") {
+      config = argv[++i];
+      if (config === undefined) throw usage("--config needs a value");
+    } else if (arg === "--json") {
+      json = true;
+    } else if (arg.startsWith("-")) {
+      throw usage(`unknown flag ${arg}`);
+    } else {
+      positional.push(arg);
+    }
+  }
+  if (positional.length === 0) {
+    throw usage("add needs an ssh host alias", "Example: `resource-monitor-axi add build-box`");
+  }
+  if (positional.length > 1) {
+    throw usage(`add takes one ssh alias, got ${positional.length}`, "Run `resource-monitor-axi add <ssh-alias>`");
+  }
+  const alias = positional[0];
+  const targetPath = config ?? configPath();
+
+  const [sshInfo, reach] = await Promise.all([
+    inspectSshHost(alias),
+    checkReachability(alias),
+  ]);
+
+  const result = addHostToConfig(alias, targetPath);
+
+  const doc = {
+    host: alias,
+    hostname: sshInfo.hostname || alias,
+    user: sshInfo.user || null,
+    port: sshInfo.port || 22,
+    config: result.path,
+    status: result.alreadyPresent ? "already in config" : "added",
+    reachable: reach.reachable,
+  };
+  if (!reach.reachable) {
+    if (reach.error) doc.error = reach.error;
+    if (!result.alreadyPresent) {
+      doc.note = "saved to config but host is unreachable";
+    }
+  }
+  if (result.alreadyPresent) {
+    doc.note = "no-op: host is already in config";
+  }
+  doc.help = [
+    ...(!reach.reachable ? [`Run \`ssh ${alias} true\` to check an unreachable host`] : []),
+    "Run `resource-monitor-axi` for a snapshot",
+  ];
+
+  if (json) return JSON.stringify(doc, null, 2);
+  return doc;
 }
 
 /**
@@ -465,8 +538,8 @@ export async function main(argv) {
     version: PACKAGE.version,
     packageName: PACKAGE.name,
     topLevelHelp: HELP,
-    commands: { run, init },
+    commands: { run, init, add },
     home: run,
-    getCommandHelp: (command) => (command === "init" ? INIT_HELP : HELP),
+    getCommandHelp: (command) => (command === "init" ? INIT_HELP : command === "add" ? ADD_HELP : HELP),
   });
 }

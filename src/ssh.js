@@ -131,3 +131,80 @@ export function shortReason(stderr, code) {
   if (lower.includes("broken pipe") || lower.includes("closed by") || lower.includes("reset by") || lower.includes("not responding")) return CONNECTION_LOST;
   return line.replace(/^ssh: /, "").slice(0, 60);
 }
+
+/** Check ssh configuration for an alias using ssh -G to inspect resolved hostname, user and port. */
+export function inspectSshHost(host, options = {}) {
+  const sshConfig = options.sshConfig ?? process.env.RESOURCE_MONITOR_AXI_SSH_CONFIG;
+  const args = [];
+  if (sshConfig) args.push("-F", sshConfig);
+  args.push("-G", host);
+  return new Promise((resolve) => {
+    const child = spawn("ssh", args, { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      resolve({ host, hostname: host, error: "timed out" });
+    }, options.timeoutMs ?? 5000);
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      resolve({ host, hostname: host, error: error.code === "ENOENT" ? "ssh not found" : error.message });
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        resolve({ host, hostname: host, error: shortReason(stderr, code) });
+        return;
+      }
+      const parsed = {};
+      for (const line of stdout.split("\n")) {
+        const match = line.match(/^(\S+)\s+(.*)$/);
+        if (match) parsed[match[1].toLowerCase()] = match[2];
+      }
+      resolve({
+        host,
+        hostname: parsed.hostname || host,
+        user: parsed.user || null,
+        port: parsed.port ? Number(parsed.port) : 22,
+      });
+    });
+  });
+}
+
+/** Test if an ssh host alias is reachable. */
+export function checkReachability(host, options = {}) {
+  const sshConfig = options.sshConfig ?? process.env.RESOURCE_MONITOR_AXI_SSH_CONFIG;
+  const timeoutS = options.connectTimeoutS ?? CONNECT_TIMEOUT_S;
+  const args = [];
+  if (sshConfig) args.push("-F", sshConfig);
+  args.push(
+    "-o", "BatchMode=yes",
+    "-o", `ConnectTimeout=${timeoutS}`,
+    "-o", "LogLevel=ERROR",
+    host,
+    "true",
+  );
+  return new Promise((resolve) => {
+    const child = spawn("ssh", args, { stdio: ["ignore", "ignore", "pipe"] });
+    let stderr = "";
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      resolve({ reachable: false, error: "connection timed out" });
+    }, options.timeoutMs ?? (timeoutS + 2) * 1000);
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      resolve({ reachable: false, error: error.code === "ENOENT" ? "ssh not found" : error.message });
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code === 0) {
+        resolve({ reachable: true });
+      } else {
+        resolve({ reachable: false, error: shortReason(stderr, code) });
+      }
+    });
+  });
+}
