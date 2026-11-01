@@ -127,9 +127,10 @@ test("a config with no remote hosts says so, and the panel frame shows this mach
   writeFileSync(solo, JSON.stringify({ local: { label: "laptop" } }));
   const r = cli("--config", solo);
   assert.equal(r.code, 0);
+  assert.match(r.out, /header: "resource-monitor-axi · \d\d:\d\d · 1 live · 0 stale"/);
   assert.match(r.out, /count: 0/);
   assert.match(r.out, /hosts: \[\]/);
   assert.match(r.out, /No remote hosts configured/);
-  assert.match(cli("--config", solo, "--tui", "--once").out, /resource-monitor-axi · \d\d:\d\d · 1 live/);
+  assert.match(cli("--config", solo, "--tui", "--once").out, /resource-monitor-axi · \d\d:\d\d · 1 live · 0 stale/);
   assert.match(cli("--config", solo, "--tui", "--once").out, /● laptop \(local\) · /);
 });

@@ -6,7 +6,7 @@ live panel for people, built to run in a second terminal, stacked above or below
 borrows its look: rounded text boxes, muted labels, a dim status header.
 
 ```
-  resource-monitor-axi · 10:09 · 2 live
+  resource-monitor-axi · 10:09 · 2 live · 0 stale
 
 ● build-box · M5 Mac
 ╭─ cpu ─────────────────────────────────── 16% ─╮

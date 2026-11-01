@@ -113,12 +113,12 @@ test("a host loses chart rows to fit the pane, then falls back to cards", () => 
 
 test("a short pane scrolls instead of hiding hosts, and the header stays pinned", () => {
   const second = { ...live, label: "mini" };
-  const top = renderFrame([live, second], { columns: 50, rows: 20, now: NOW });
+  const top = renderFrame([live, second], { columns: 60, rows: 20, now: NOW });
   assert.equal(top.maxScroll > 0, true);
   assert.match(top.text, /↓\d+/);
   assert.equal(top.text.includes("mini"), false);
-  assert.match(top.text.split("\n")[0], /^ {2}resource-monitor-axi · \d\d:\d\d · 2 live · ↓\d+$/, "the counts stay whole beside the scroll marks");
-  const bottom = renderFrame([live, second], { columns: 50, rows: 20, now: NOW, scroll: 9999 });
+  assert.match(top.text.split("\n")[0], /^ {2}resource-monitor-axi · \d\d:\d\d · 2 live · 0 stale · ↓\d+$/, "the counts stay whole beside the scroll marks");
+  const bottom = renderFrame([live, second], { columns: 60, rows: 20, now: NOW, scroll: 9999 });
   assert.equal(bottom.scroll, top.maxScroll);
   assert.match(bottom.text, /mini/);
   assert.match(bottom.text.split("\n")[0], /resource-monitor-axi/);
@@ -127,7 +127,7 @@ test("a short pane scrolls instead of hiding hosts, and the header stays pinned"
   assert.equal(tiny.text.split("\n").length, 6);
   assert.equal(tiny.maxScroll > 0, true);
   const crowded = renderFrame([live, second], { columns: 34, rows: 25, now: NOW });
-  assert.match(crowded.text.split("\n").find((l) => l.includes("↓")), /^ {2}\d\d:\d\d · 2 live · ↓\d+$|^ {2}2 live · ↓\d+$/);
+  assert.match(crowded.text.split("\n").find((l) => l.includes("↓")), /^ {2}\d\d:\d\d · 2 live · 0 stale · ↓\d+$|^ {2}2 live · 0 stale · ↓\d+$/);
 });
 
 test("an unreachable host is dim with reason and age, keeps its chart and leaves the totals", () => {
@@ -177,4 +177,15 @@ test("a key of every shortcut stays on the bottom rows, naming what w and i chan
   assert.doesNotMatch(cards, /w window/);
   assert.equal(renderFrame([live], { columns: 50, rows: 9, now: NOW, keys: true }).text.includes("q quit"), false, "a tiny pane keeps its room for data");
   assert.equal(renderFrame([live], { columns: 50, now: NOW }).text.includes("q quit"), false, "no key without a live panel");
+});
+
+test("the top line re-renders when the minute changes, even between samples and at long interval", () => {
+  const base = new Date(2026, 10, 1, 10, 9, 59).getTime();
+  const nextMinute = base + 1000;
+  const f1 = renderFrame([live], { columns: 80, now: base, intervalS: 60 }).text.split("\n")[0];
+  const f2 = renderFrame([live], { columns: 80, now: nextMinute, intervalS: 60 }).text.split("\n")[0];
+  assert.match(f1, / · 10:09 · /);
+  assert.match(f2, / · 10:10 · /);
+  assert.match(f1, / · 0 stale$/);
+  assert.match(f2, / · 0 stale$/);
 });

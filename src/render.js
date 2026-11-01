@@ -434,19 +434,24 @@ export function countsText(levels, stale, room) {
 export const firstFit = (choices, room) => choices.find((c) => width(c) <= room) ?? fit(choices.at(-1), room);
 
 export function formatQueryTime(dateOrMs) {
-  const d = new Date(dateOrMs);
-  const hour = String(d.getHours()).padStart(2, "0");
-  const minute = String(d.getMinutes()).padStart(2, "0");
-  return `${hour}:${minute}`;
+  const d = dateOrMs instanceof Date ? dateOrMs : new Date(dateOrMs);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(d);
+  const get = (type) => parts.find((part) => part.type === type)?.value ?? "";
+  const hour = get("hour") === "24" ? "00" : get("hour");
+  return `${hour}:${get("minute")}`;
 }
 
 export function formatHeaderLine({ name = "resource-monitor-axi", time, live = 0, stale = 0, columns = 80 }) {
-  const counts = [`${live} live`, ...(stale > 0 ? [`${stale} stale`] : [])];
+  const counts = [`${live} live`, `${stale} stale`];
   const room = columns - 2;
   const candidates = [
     [name, time, ...counts].filter(Boolean).join(" · "),
-    [name, ...counts].join(" · "),
     ...(time ? [[time, ...counts].join(" · ")] : []),
+    [name, ...counts].join(" · "),
     counts.join(" · "),
   ];
   return firstFit(candidates, room);
@@ -510,7 +515,6 @@ export function composeFrame({ header, body }, { columns = 80, rows, scroll = 0,
       const candidates = [
         text,
         text.replace(/^  resource-monitor-axi · /, "  "),
-        text.replace(/^  resource-monitor-axi · \d\d:\d\d · /, "  "),
       ];
       const best = firstFit(candidates, room);
       head = header.with(at, [{ text: `${best}${suffix}`, style: "dim" }]);
