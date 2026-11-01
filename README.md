@@ -65,6 +65,7 @@ They last until you quit; to change what it opens with, use the config.
 | `c` | switch between charts and cards |
 | `w` | cycle the chart window: 15m, 1h, 6h, 24h |
 | `i` | cycle the sample interval: 3, 5, 15, 30, 60 s |
+| `r` | refresh |
 | `j` `k`, arrows | scroll a line |
 | space, page keys | scroll a page |
 | `g` `G`, home, end | top and bottom |

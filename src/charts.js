@@ -387,6 +387,7 @@ function keyFooter(view, { columns, intervalS, windowS, toggle }) {
     ["c", view === "charts" ? "cards" : "charts"],
     ...(view === "charts" ? [["w", `window ${labelOf(windowS)} → ${labelOf(nextWindow)}`]] : []),
     ["i", `every ${intervalS}s → ${nextInterval}s`],
+    ["r", "refresh"],
     ["j k", "scroll"],
     ["space", "page"],
     ["g G", "top/end"],

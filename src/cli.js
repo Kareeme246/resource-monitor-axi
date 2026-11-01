@@ -25,7 +25,7 @@ flags[11]:
   --fields <a,b,c>, --full, --json, --config <file>, --tui, --once, --view <charts|cards>, --interval <seconds>, --theme <light|dark>, --help, --version
 tui:
   --tui draws the live panel for people and needs a terminal. --once prints one frame, for any output.
-  Keys, also shown along its bottom: v this machine or the servers, c charts or cards, w chart window, i sample interval, j k or arrows scroll, space or page keys scroll a page, g G top and bottom, q quit.
+  Keys, also shown along its bottom: v this machine or the servers, c charts or cards, w chart window, i sample interval, r refresh, j k or arrows scroll, space or page keys scroll a page, g G top and bottom, q quit.
   It keeps 24 hours of readings per host in a small local file. --view, --interval, --theme and --once need --tui.
 config:
   ${configPath()}
@@ -124,7 +124,8 @@ const CPU_WINDOW = 3;
 /** One sample attempt; failure keeps the previous reading as the stale body. */
 export async function refresh(state, sample = state.local ? sampleLocal : sampleHost) {
   try {
-    const next = await sample(state.host);
+    const run = state.sampleFn ?? sample;
+    const next = await run(state.host);
     if (next.cpuPct !== undefined) {
       state.cpuHistory = [...(state.cpuHistory ?? []), next.cpuPct].slice(-CPU_WINDOW);
       next.cpuNowPct = next.cpuPct;
@@ -242,7 +243,11 @@ const SCROLL_KEYS = {
 };
 
 /** Apply one key to the view state. Returns true when it should repaint. */
-export function applyKey(key, ui, { page = 10, maxScroll = 0 } = {}) {
+export function applyKey(key, ui, { page = 10, maxScroll = 0, onRefresh = ui?.onRefresh } = {}) {
+  if (key === "r") {
+    onRefresh?.();
+    return false;
+  }
   if (key === "c") {
     ui.view = ui.view === "charts" ? "cards" : "charts";
     ui.scroll = 0;
@@ -274,9 +279,9 @@ const ENTER_SCREEN = "\x1b[?1049h\x1b[?25l";
 const LEAVE_SCREEN = "\x1b[?25h\x1b[?1049l";
 const CLEAR = "\x1b[H\x1b[2J";
 
-async function panel(remotes, local, { theme, depth, ui }) {
+export async function panel(remotes, local, { theme, depth, ui, stdout = process.stdout, stdin = process.stdin } = {}) {
   const states = [...remotes, ...(local ? [local] : [])];
-  const out = process.stdout;
+  const out = stdout;
   let last = { maxScroll: 0 };
   const frame = () =>
     renderFrame(ui.scope === "local" ? [local] : remotes, {
@@ -313,18 +318,24 @@ async function panel(remotes, local, { theme, depth, ui }) {
   let quit = false;
   stopped.then(() => (quit = true));
 
+  const triggers = [];
+  const triggerRefresh = () => {
+    for (const trigger of triggers) trigger();
+  };
+  ui.onRefresh = triggerRefresh;
+
   out.write(ENTER_SCREEN);
   out.on("resize", redraw);
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
-  if (process.stdin.isTTY) {
-    process.stdin.setRawMode(true);
-    process.stdin.resume();
-    process.stdin.on("data", (chunk) => {
+  if (stdin.isTTY) {
+    stdin.setRawMode?.(true);
+    stdin.resume?.();
+    stdin.on("data", (chunk) => {
       for (const key of splitKeys(chunk.toString())) {
         if (/^[qQ\x03\x04]$/.test(key)) return stop();
         const page = Math.max(1, (out.rows ?? 24) - 3);
-        if (applyKey(key, ui, { page, maxScroll: last.maxScroll })) draw();
+        if (applyKey(key, ui, { page, maxScroll: last.maxScroll, onRefresh: triggerRefresh })) draw();
       }
     });
   }
@@ -333,15 +344,30 @@ async function panel(remotes, local, { theme, depth, ui }) {
   // Each host owns its cadence: sample, repaint, then wait out the rest of the
   // interval, so a slow host never delays the others and none is polled early.
   for (const state of states) {
+    let wake = null;
+    let sampling = false;
+    triggers.push(() => {
+      if (!sampling && wake) wake(true);
+    });
     (async () => {
       while (!quit) {
-        const started = Date.now();
+        sampling = true;
         await refresh(state);
+        sampling = false;
         if (quit) break;
         draw();
+        let started = Date.now();
         // Rechecked each second, so changing the interval with i applies at once.
         while (!quit && Date.now() - started < ui.intervalS * 1000) {
-          await Promise.race([stopped, new Promise((resolve) => setTimeout(resolve, Math.min(1000, ui.intervalS * 1000 - (Date.now() - started))).unref())]);
+          const woken = await Promise.race([
+            stopped,
+            new Promise((resolve) => {
+              wake = resolve;
+            }),
+            new Promise((resolve) => setTimeout(resolve, Math.min(1000, ui.intervalS * 1000 - (Date.now() - started))).unref()),
+          ]);
+          wake = null;
+          if (woken === true) break;
         }
       }
     })();
@@ -350,11 +376,13 @@ async function panel(remotes, local, { theme, depth, ui }) {
   const clock = setInterval(draw, 1000);
   await stopped;
   clearInterval(clock);
+  process.off("SIGINT", stop);
+  process.off("SIGTERM", stop);
   out.write(LEAVE_SCREEN);
   out.off("resize", redraw);
-  if (process.stdin.isTTY) {
-    process.stdin.setRawMode(false);
-    process.stdin.pause();
+  if (stdin.isTTY) {
+    stdin.setRawMode?.(false);
+    stdin.pause?.();
   }
 }
 

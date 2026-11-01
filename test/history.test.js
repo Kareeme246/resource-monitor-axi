@@ -107,6 +107,16 @@ test("c switches views, v switches between this machine and the servers, w cycle
   applyKey("i", ui);
   applyKey("i", ui);
   assert.equal(ui.intervalS, 3, "wraps to the floor");
+  let refreshed = 0;
+  assert.equal(applyKey("r", ui, { onRefresh: () => refreshed++ }), false);
+  assert.equal(refreshed, 1);
+  assert.equal(applyKey("R", ui, { onRefresh: () => refreshed++ }), false, "capital R must do nothing");
+  assert.equal(refreshed, 1, "capital R must not refresh");
+  ui.onRefresh = () => refreshed++;
+  assert.equal(applyKey("r", ui), false);
+  assert.equal(refreshed, 2);
+  assert.equal(applyKey("R", ui), false);
+  assert.equal(refreshed, 2);
   const range = { page: 10, maxScroll: 15 };
   applyKey("k", ui, range);
   assert.equal(ui.scroll, 0);

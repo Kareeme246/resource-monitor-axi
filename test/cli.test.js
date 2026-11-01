@@ -88,6 +88,7 @@ test("--tui --once prints a frame without a terminal, and help comes per command
   assert.match(frame.out, /● good · M4 Pro · 14c/);
   assert.match(frame.out, /○ bad · unreachable/);
   assert.match(cli("--help").out, /--tui/);
+  assert.match(cli("--help").out, /r refresh/);
   assert.doesNotMatch(cli("--help").out, /--watch/);
   assert.match(cli("init", "--help").out, /starter config/);
 });
