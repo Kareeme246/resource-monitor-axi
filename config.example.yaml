@@ -1,0 +1,13 @@
+hosts:
+  - my-mac
+  - host: build-box
+    label: Build box
+    simCeiling: 4
+  - linux-server
+
+local:
+  label: laptop
+  simCeiling: 2
+
+interval: 15
+window: 1h

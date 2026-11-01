@@ -6,19 +6,24 @@
     "test": "node --test \"test/*.test.js\""
   },
   "keywords": [],
-  "author": "",
+  "author": "Kareeme246",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Kareeme246/resource-monitor-axi.git"
+  },
   "license": "MIT",
   "packageManager": "pnpm@12.5.1",
   "type": "module",
   "dependencies": {
     "@toon-format/toon": "^4.4.0",
-    "axi-sdk-js": "^0.1.13"
+    "axi-sdk-js": "^0.1.13",
+    "yaml": "^2.9.1"
   },
   "files": [
     "bin",
     "src",
     "LICENSE",
-    "config.example.json",
+    "config.example.yaml",
     "README.md"
   ],
   "bin": {

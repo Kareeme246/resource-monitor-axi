@@ -7,7 +7,7 @@
  * draws the latest reading, and takes the slice's peak only when it closes.
  */
 import { INTERVALS, WINDOWS } from "./config.js";
-import { CARD_WIDTH, HEALTH, HEALTH_BOLD, MIN_CARD_WIDTH, ago, cardsFrame, composeFrame, countsText, firstFit, fit, flow, hostLevels, lineWidth, coalesce, shortChip, width, words } from "./render.js";
+import { CARD_WIDTH, HEALTH, HEALTH_BOLD, MIN_CARD_WIDTH, ago, cardsFrame, composeFrame, countsText, firstFit, fit, flow, formatHeaderLine, formatQueryTime, hostLevels, lineWidth, coalesce, shortChip, width, words } from "./render.js";
 import { THRESHOLDS, loadPerCore, usageLevel, verdict } from "./verdict.js";
 
 /** Below this width boxes stack; from it they pair up; from the next they sit four across. */
@@ -301,31 +301,14 @@ export function shrinkSteps(start) {
 const metricsOf = (state) =>
   METRICS.filter((m) => state.sample?.[m.field] !== undefined || (state.points ?? []).some((p) => p[m.key] !== undefined));
 
-function statusText(states, now) {
-  if (states.length === 1) {
-    const f = hostFacts(states[0], now);
-    return f.stale ? f.status : f.v.label;
-  }
-  const levels = hostLevels(states);
-  return countsText(levels, states.length - levels.length, 0);
-}
-
-function chartHeader(states, { columns, intervalS, label, now, roomy }) {
-  const room = columns - 2;
-  const name = "resource-monitor-axi";
+function chartHeader(states, { columns, now, roomy, allStates }) {
+  const monitored = allStates ?? states;
+  const live = monitored.filter((st) => st.sample && !st.error).length;
+  const stale = monitored.filter((st) => st.error || !st.sample).length;
+  const time = formatQueryTime(now);
+  const line = formatHeaderLine({ time, live, stale, columns });
   const toLine = (text) => [{ text: `  ${text}`, style: "dim" }];
-  const pace = [`${intervalS}s`, label];
-  if (roomy) {
-    const levels = hostLevels(states);
-    const stale = states.length - levels.length;
-    const top = [name, ...pace];
-    const one = [...top, countsText(levels, stale, Infinity)].join(" · ");
-    if (width(one) <= room) return [toLine(one), []];
-    const heading = firstFit([top.join(" · "), pace.join(" · ")], room);
-    return [toLine(heading), toLine(countsText(levels, stale, room)), []];
-  }
-  const status = statusText(states, now);
-  return [toLine(firstFit([[name, ...pace, status].join(" · "), [name, pace[0], status].join(" · "), [...pace, status].join(" · ")], room))];
+  return roomy ? [toLine(line), []] : [toLine(line)];
 }
 
 /**
@@ -335,7 +318,7 @@ function chartHeader(states, { columns, intervalS, label, now, roomy }) {
  * of hiding one another. Returns null when one host cannot fit at all, or the
  * pane is too narrow for a box, which is when the card view's shapes take over.
  */
-export function chartsFrame(states, { columns = 80, rows, intervalS = 15, windowS = 3600, now = Date.now() } = {}) {
+export function chartsFrame(states, { columns = 80, rows, intervalS = 15, windowS = 3600, now = Date.now(), allStates } = {}) {
   if (columns < MIN_CARD_WIDTH) return null;
   const single = states.length === 1;
   const perRow = columns < TWO_ACROSS ? 1 : columns < FOUR_ACROSS ? 2 : 4;
@@ -348,13 +331,14 @@ export function chartsFrame(states, { columns = 80, rows, intervalS = 15, window
   const steps = shrinkSteps(start);
   const groupOf = (index) => (perRow === 1 ? index : perRow === 2 ? Math.floor(index / 2) : 0);
 
-  const buildHost = (state, heights, { labels }) => {
+  const buildHost = (state, heights, { labels, gap }) => {
     const present = metricsOf(state);
     const dim = Boolean(state.error) || !state.sample;
     const textWidth = perRow === 1 ? w : columns;
     const out = [hostHeader(state, textWidth, now)];
     const opts = { now, windowS, label, intervalS, labels, dim };
     for (let i = 0; i < present.length; i += perRow) {
+      if (i > 0 && gap) out.push([]);
       const group = present.slice(i, i + perRow);
       const h = heights[groupOf(metrics.indexOf(group[0]))];
       out.push(...sideBySide(group.map((m) => chartBox(state, m, w, h, opts))));
@@ -363,11 +347,11 @@ export function chartsFrame(states, { columns = 80, rows, intervalS = 15, window
     return out;
   };
 
-  const header = (roomy) => chartHeader(states, { columns, intervalS, label, now, roomy });
+  const header = (roomy) => chartHeader(states, { columns, now, roomy, allStates });
   const stack = (shape, gap) => {
     const body = [];
     states.forEach((state, i) => {
-      if (i && gap) body.push([]);
+      if (i && gap) body.push([], []);
       body.push(...buildHost(state, shape.heights, shape));
     });
     return body;
@@ -421,11 +405,11 @@ const MIN_BODY_FOR_KEY = 8;
  * `toggle` names what `v` would switch to, when there is anything to switch to.
  * @returns {{text: string, maxScroll: number, scroll: number}}
  */
-export function renderFrame(states, { view = "charts", columns = 80, rows, intervalS = 15, windowS = 3600, now = Date.now(), depth = "none", theme = "dark", scroll = 0, keys = false, toggle } = {}) {
+export function renderFrame(states, { view = "charts", columns = 80, rows, intervalS = 15, windowS = 3600, now = Date.now(), depth = "none", theme = "dark", scroll = 0, keys = false, toggle, allStates } = {}) {
   let footer = keys ? keyFooter(view, { columns, intervalS, windowS, toggle }) : [];
   if (rows !== undefined && rows - footer.length < MIN_BODY_FOR_KEY) footer = [];
   const room = rows === undefined ? undefined : rows - footer.length;
-  const charts = view === "charts" ? chartsFrame(states, { columns, rows: room, intervalS, windowS, now }) : null;
-  const frame = charts ?? cardsFrame(states, { columns, rows: room, intervalS, now });
+  const charts = view === "charts" ? chartsFrame(states, { columns, rows: room, intervalS, windowS, now, allStates }) : null;
+  const frame = charts ?? cardsFrame(states, { columns, rows: room, intervalS, now, allStates });
   return composeFrame(frame, { columns, rows: room, scroll, depth, theme, footer });
 }

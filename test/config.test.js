@@ -12,7 +12,7 @@ test("loadConfig parses hosts with default and custom simCeiling", () => {
       tmp,
       JSON.stringify({
         hosts: [
-          "build-box.local",
+          "build-box",
           { host: "mini", label: "Mac mini", simCeiling: 4 },
           { host: "studio", simCeiling: 1 },
         ],
@@ -22,7 +22,7 @@ test("loadConfig parses hosts with default and custom simCeiling", () => {
     const cfg = loadConfig(tmp);
     assert.equal(cfg.intervalS, 10);
     assert.deepEqual(cfg.hosts, [
-      { host: "build-box.local", label: "build-box.local", simCeiling: 2 },
+      { host: "build-box", label: "build-box", simCeiling: 2 },
       { host: "mini", label: "Mac mini", simCeiling: 4 },
       { host: "studio", label: "studio", simCeiling: 1 },
     ]);
@@ -31,6 +31,16 @@ test("loadConfig parses hosts with default and custom simCeiling", () => {
       unlinkSync(tmp);
     } catch {}
   }
+});
+
+test("loadConfig without a file defaults to local machine only with no remote hosts", () => {
+  const nonExistent = join(tmpdir(), `resource-monitor-axi-none-${Date.now()}.json`);
+  const cfg = loadConfig(nonExistent);
+  assert.deepEqual(cfg.hosts, []);
+  assert.equal(cfg.intervalS, 15);
+  assert.equal(cfg.window, "1h");
+  assert.ok(cfg.local);
+  assert.equal(cfg.local.simCeiling, 2);
 });
 
 test("loadConfig rejects invalid simCeiling", () => {
@@ -87,5 +97,44 @@ test("this machine is on by default, configurable, and a config can have only it
     assert.throws(() => loadConfig(tmp), /local/);
   } finally {
     unlinkSync(tmp);
+  }
+});
+
+test("loadConfig parses YAML and writeDefaultConfig writes valid YAML with commented example", async () => {
+  const { writeDefaultConfig, DEFAULT_CONFIG_YAML } = await import("../src/config.js");
+  const tmpYaml = join(tmpdir(), `resource-monitor-axi-init-${Date.now()}.yaml`);
+  try {
+    const created = writeDefaultConfig(tmpYaml);
+    assert.equal(created, true);
+    assert.match(DEFAULT_CONFIG_YAML, /# hosts:\n#   - build-box/);
+    assert.match(DEFAULT_CONFIG_YAML, /hosts: \[\]/);
+    const cfg = loadConfig(tmpYaml);
+    assert.deepEqual(cfg.hosts, []);
+    assert.equal(cfg.intervalS, 15);
+    assert.equal(cfg.window, "1h");
+  } finally {
+    try { unlinkSync(tmpYaml); } catch {}
+  }
+});
+
+test("loadConfig falls back to legacy config.json when config.yaml is absent and prints a note", () => {
+  const tmpBase = join(tmpdir(), `resource-monitor-axi-legacy-${Date.now()}`);
+  const yamlPath = `${tmpBase}.yaml`;
+  const jsonPath = `${tmpBase}.json`;
+  try {
+    writeFileSync(jsonPath, JSON.stringify({ hosts: ["legacy-host"], interval: 20 }));
+    let stderr = "";
+    const origStderrWrite = process.stderr.write;
+    process.stderr.write = (chunk) => { stderr += chunk; return true; };
+    try {
+      const cfg = loadConfig(yamlPath);
+      assert.equal(cfg.hosts[0].host, "legacy-host");
+      assert.equal(cfg.intervalS, 20);
+      assert.match(stderr, /found; move to/);
+    } finally {
+      process.stderr.write = origStderrWrite;
+    }
+  } finally {
+    try { unlinkSync(jsonPath); } catch {}
   }
 });

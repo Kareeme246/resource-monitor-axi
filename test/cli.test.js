@@ -45,6 +45,7 @@ test("no arguments is the home view: bin, description and live data with aggrega
   assert.equal(code, 0);
   assert.match(out, /^bin: /);
   assert.match(out, /description: /);
+  assert.match(out, /header: "resource-monitor-axi · \d\d:\d\d · 1 live · 1 stale"/);
   assert.match(out, /count: 2/);
   assert.match(out, /summary: "1 free, 0 busy, 0 saturated, 1 unreachable"/);
   assert.match(out, /hosts\[1\]\{host,verdict,simsFree,reason\}:/);
@@ -83,6 +84,7 @@ test("a bad config is a structured failure with exit 1", () => {
 test("--tui --once prints a frame without a terminal, and help comes per command", () => {
   const frame = cli("--tui", "--once");
   assert.equal(frame.code, 0);
+  assert.match(frame.out, /resource-monitor-axi · \d\d:\d\d · 1 live · 1 stale/);
   assert.match(frame.out, /● good · M4 Pro · 14c/);
   assert.match(frame.out, /○ bad · unreachable/);
   assert.match(cli("--help").out, /--tui/);
@@ -101,7 +103,7 @@ test("a connection that drops without a reason recovers, and if it does not, say
 
 test("the example config is valid and the package ships it", async () => {
   const { loadConfig } = await import("../src/config.js");
-  const example = fileURLToPath(new URL("../config.example.json", import.meta.url));
+  const example = fileURLToPath(new URL("../config.example.yaml", import.meta.url));
   assert.equal(loadConfig(example).hosts.length, 3);
 });
 
@@ -128,5 +130,6 @@ test("a config with no remote hosts says so, and the panel frame shows this mach
   assert.match(r.out, /count: 0/);
   assert.match(r.out, /hosts: \[\]/);
   assert.match(r.out, /No remote hosts configured/);
+  assert.match(cli("--config", solo, "--tui", "--once").out, /resource-monitor-axi · \d\d:\d\d · 1 live/);
   assert.match(cli("--config", solo, "--tui", "--once").out, /● laptop \(local\) · /);
 });

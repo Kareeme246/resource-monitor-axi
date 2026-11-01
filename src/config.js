@@ -1,8 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { dirname, join } from "node:path";
+import YAML from "yaml";
 
-export const DEFAULT_HOSTS = ["build-box.local"];
+export const DEFAULT_HOSTS = [];
 export const DEFAULT_INTERVAL_S = 15;
 /** A sample is a few commands over ssh; never poll a host faster than this. */
 export const MIN_INTERVAL_S = 3;
@@ -20,7 +21,11 @@ export const DEFAULT_SIM_CEILING = 2;
 
 export function configPath(env = process.env) {
   const base = env.XDG_CONFIG_HOME || join(homedir(), ".config");
-  return env.RESOURCE_MONITOR_AXI_CONFIG || join(base, "resource-monitor-axi", "config.json");
+  return env.RESOURCE_MONITOR_AXI_CONFIG || join(base, "resource-monitor-axi", "config.yaml");
+}
+
+export function legacyConfigPath(path = configPath()) {
+  return path.replace(/\.ya?ml$/, ".json");
 }
 
 /** This machine's own entry: on unless `local` is false, with an optional label and ceiling. */
@@ -43,54 +48,81 @@ function localEntry(raw, path) {
  * `hosts` may be left out or empty when only this machine matters, and `local`
  * configures this machine, which is sampled without ssh.
  * `interval` is seconds between samples and `window` the chart span that opens
- * first (15m, 1h, 6h or 24h). A missing file means the defaults.
+ * first (15m, 1h, 6h or 24h). Without a config file, defaults to local machine only.
  */
 export function loadConfig(path = configPath()) {
-  if (!existsSync(path)) {
+  let effectivePath = path;
+  if (!existsSync(effectivePath)) {
+    const legacy = legacyConfigPath(effectivePath);
+    if (legacy !== effectivePath && existsSync(legacy)) {
+      process.stderr.write(`note: ${legacy} found; move to ${effectivePath}\n`);
+      effectivePath = legacy;
+    }
+  }
+  if (!existsSync(effectivePath)) {
     return {
       hosts: DEFAULT_HOSTS.map((host) => ({ host, label: host, simCeiling: DEFAULT_SIM_CEILING })),
       intervalS: DEFAULT_INTERVAL_S,
       window: DEFAULT_WINDOW,
-      local: localEntry(undefined, path),
+      local: localEntry(undefined, effectivePath),
     };
   }
-  let json;
+  let parsed;
   try {
-    json = JSON.parse(readFileSync(path, "utf8"));
+    parsed = YAML.parse(readFileSync(effectivePath, "utf8"));
   } catch (error) {
-    throw new Error(`cannot read ${path}: ${error.message}`);
+    throw new Error(`cannot read ${effectivePath}: ${error.message}`);
   }
-  const rawHosts = json.hosts ?? [];
-  if (!Array.isArray(rawHosts)) throw new Error(`${path}: "hosts" must be an array`);
-  const local = localEntry(json.local, path);
-  if (rawHosts.length === 0 && !local) throw new Error(`${path} has nothing to monitor: add "hosts" or remove "local": false`);
+  if (parsed === null || typeof parsed !== "object") parsed = {};
+  const rawHosts = parsed.hosts ?? [];
+  if (!Array.isArray(rawHosts)) throw new Error(`${effectivePath}: "hosts" must be an array`);
+  const local = localEntry(parsed.local, effectivePath);
+  if (rawHosts.length === 0 && !local) throw new Error(`${effectivePath} has nothing to monitor: add "hosts" or remove "local": false`);
   const hosts = rawHosts.map((entry) => {
     const host = typeof entry === "string" ? entry : entry?.host;
     if (typeof host !== "string" || host === "") {
-      throw new Error(`${path}: every host needs an ssh alias`);
+      throw new Error(`${effectivePath}: every host needs an ssh alias`);
     }
     const label = (typeof entry === "object" && entry.label) || host;
     const rawCeiling = typeof entry === "object" ? (entry.simCeiling ?? entry.simsCeiling) : undefined;
     const simCeiling = rawCeiling ?? DEFAULT_SIM_CEILING;
     if (typeof simCeiling !== "number" || !Number.isInteger(simCeiling) || simCeiling < 1) {
-      throw new Error(`${path}: "simCeiling" for ${host} must be a positive integer`);
+      throw new Error(`${effectivePath}: "simCeiling" for ${host} must be a positive integer`);
     }
     return { host, label, simCeiling };
   });
-  const interval = json.interval ?? DEFAULT_INTERVAL_S;
+  const interval = parsed.interval ?? DEFAULT_INTERVAL_S;
   if (typeof interval !== "number" || interval < MIN_INTERVAL_S) {
-    throw new Error(`${path}: "interval" must be a number of seconds, at least ${MIN_INTERVAL_S}`);
+    throw new Error(`${effectivePath}: "interval" must be a number of seconds, at least ${MIN_INTERVAL_S}`);
   }
-  const window = json.window ?? DEFAULT_WINDOW;
+  const window = parsed.window ?? DEFAULT_WINDOW;
   if (!WINDOWS.some((w) => w.label === window)) {
-    throw new Error(`${path}: "window" must be one of ${WINDOWS.map((w) => w.label).join(", ")}`);
+    throw new Error(`${effectivePath}: "window" must be one of ${WINDOWS.map((w) => w.label).join(", ")}`);
   }
   return { hosts, intervalS: interval, window, local };
 }
 
+export const DEFAULT_CONFIG_YAML = `# SSH host aliases to monitor. Add remote hosts here:
+# hosts:
+#   - build-box
+#   - host: mini
+#     label: Mac mini
+#     simCeiling: 4
+hosts: []
+
+# Sample interval in seconds (default 15, minimum 3)
+interval: 15
+
+# Initial chart window: 15m, 1h, 6h, or 24h (default 1h)
+window: 1h
+
+# This machine (sampled locally without ssh). Set false to disable:
+# local: false
+`;
+
 export function writeDefaultConfig(path = configPath()) {
   if (existsSync(path)) return false;
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify({ hosts: DEFAULT_HOSTS, interval: DEFAULT_INTERVAL_S, window: DEFAULT_WINDOW }, null, 2)}\n`);
+  writeFileSync(path, DEFAULT_CONFIG_YAML);
   return true;
 }

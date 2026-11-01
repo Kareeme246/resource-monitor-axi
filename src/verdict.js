@@ -1,9 +1,9 @@
 /**
  * Spare-capacity verdict for one host. Plain thresholds, no scoring model.
  *
- * Measured on build-box.local (M4 Pro, 14 cores, 24 GB): see README "Where the
+ * Measured on an M4 Pro (14 cores, 24 GB): see README "Where the
  * numbers come from". The simulator ceiling defaults to 2 (the known ceiling on
- * Pro 16) and can be configured per host. The other cut points colour the numbers.
+ * that hardware) and can be configured per host. The other cut points colour the numbers.
  */
 export const THRESHOLDS = {
   simCeiling: 2,

@@ -4,7 +4,7 @@ import { encode } from "@toon-format/toon";
 import { gapMsFor, nextInCycle, renderFrame } from "./charts.js";
 import { DEFAULT_INTERVAL_S, DEFAULT_WINDOW, INTERVALS, MIN_INTERVAL_S, WINDOWS, configPath, loadConfig, writeDefaultConfig } from "./config.js";
 import { LOCAL_ID, addRecord, historyPath, loadHistory, recordOf } from "./history.js";
-import { detectColorDepth } from "./render.js";
+import { detectColorDepth, formatHeaderLine, formatQueryTime } from "./render.js";
 import { closeConnections, sampleHost, sampleLocal } from "./ssh.js";
 import { THRESHOLDS, verdict } from "./verdict.js";
 
@@ -29,8 +29,14 @@ tui:
   It keeps 24 hours of readings per host in a small local file. --view, --interval, --theme and --once need --tui.
 config:
   ${configPath()}
-  {"hosts":["build-box.local",{"host":"mini","label":"Mac mini"}],"local":{"label":"laptop","simCeiling":2},"interval":15,"window":"${DEFAULT_WINDOW}"}
-  Hosts are ~/.ssh/config aliases, and may be left out to watch only this machine. "local":false stops sampling this machine. interval is seconds between samples per host (default ${DEFAULT_INTERVAL_S}, minimum ${MIN_INTERVAL_S}). window is the chart span that opens first (${WINDOWS.map((w) => w.label).join(", ")}; default ${DEFAULT_WINDOW}). resource-monitor-axi init writes a starter file.
+  hosts:
+    - build-box
+    - host: mini
+      label: Mac mini
+  local: { label: laptop, simCeiling: 2 }
+  interval: 15
+  window: ${DEFAULT_WINDOW}
+  Hosts are ~/.ssh/config aliases, and may be left out to watch only this machine. "local: false" stops sampling this machine. interval is seconds between samples per host (default ${DEFAULT_INTERVAL_S}, minimum ${MIN_INTERVAL_S}). window is the chart span that opens first (${WINDOWS.map((w) => w.label).join(", ")}; default ${DEFAULT_WINDOW}). resource-monitor-axi init writes a starter file.
 notes:
   Samples ride one reused ssh connection per host and run stock tools, and never prompt. Nothing is installed on or left running on a host. RESOURCE_MONITOR_AXI_SSH_CONFIG=<file> points ssh at another config file.
 examples:
@@ -182,10 +188,17 @@ function snapshotOutput(remotes, local, { json, full, fields }) {
   const ok = hosts.filter((h) => h.status === "ok");
   const down = hosts.filter((h) => h.status !== "ok");
   const columns = fields ?? (full || json ? ALL_FIELDS : FIELDS);
-  const doc = { generatedAt: new Date().toISOString() };
-  if (local) {
-    const [row] = snapshotData([local]);
-    doc.local = row.status === "ok" ? pick(row, columns) : { host: row.host, status: row.status, error: row.error };
+  const localRow = local ? snapshotData([local])[0] : null;
+  const localOk = localRow && localRow.status === "ok";
+  const localDown = localRow && localRow.status !== "ok";
+  const liveCount = (localOk ? 1 : 0) + ok.length;
+  const staleCount = (localDown ? 1 : 0) + down.length;
+  const generatedAt = new Date().toISOString();
+  const time = formatQueryTime(generatedAt);
+  const header = formatHeaderLine({ time, live: liveCount, stale: staleCount, columns: Infinity });
+  const doc = { header, generatedAt };
+  if (localRow) {
+    doc.local = localOk ? pick(localRow, columns) : { host: localRow.host, status: localRow.status, error: localRow.error };
   }
   // The counts below are the remote hosts only; this machine speaks for itself above.
   Object.assign(doc, aggregates(hosts), { hosts: ok.map((h) => pick(h, columns)) });
@@ -267,6 +280,7 @@ async function panel(remotes, local, { theme, depth, ui }) {
   let last = { maxScroll: 0 };
   const frame = () =>
     renderFrame(ui.scope === "local" ? [local] : remotes, {
+      allStates: states,
       toggle: ui.canToggle ? (ui.scope === "local" ? "servers" : "local") : undefined,
       view: ui.view,
       windowS: ui.windowS,
@@ -381,7 +395,7 @@ async function run(argv) {
     await Promise.all(states.map((st) => refresh(st)));
     if (flags.tui) {
       const depth = detectColorDepth(process.env, process.stdout.isTTY);
-      return renderFrame(scope === "local" ? [local] : remotes, { view, windowS, columns: process.stdout.columns || 100, intervalS, depth, theme }).text;
+      return renderFrame(scope === "local" ? [local] : remotes, { allStates: states, view, windowS, columns: process.stdout.columns || 100, intervalS, depth, theme }).text;
     }
     return snapshotOutput(remotes, local, { json: flags.json, full: flags.full, fields });
   } finally {

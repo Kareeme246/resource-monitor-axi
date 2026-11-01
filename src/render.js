@@ -416,7 +416,7 @@ function layout(cards, w, columns) {
       });
       out.push(line);
     }
-    if (i + cols < cards.length) out.push([]);
+    if (i + cols < cards.length) out.push([], []);
   }
   return out;
 }
@@ -433,20 +433,23 @@ export function countsText(levels, stale, room) {
 /** The first of `choices` that fits, or the last one cut to fit. */
 export const firstFit = (choices, room) => choices.find((c) => width(c) <= room) ?? fit(choices.at(-1), room);
 
-/** The fleet summary: one dim line when it fits, otherwise two. */
-function headerLines(states, v, intervalS, now, columns) {
-  const stale = states.filter((st) => st.error || !st.sample).length;
-  const counts = [0, 1, 2].map((lvl) => `${v.filter((x) => x === lvl).length} ${["free", "busy", "saturated"][lvl]}`);
-  counts.push(`${stale} stale`);
-  const time = new Date(now).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+export function formatQueryTime(dateOrMs) {
+  const d = new Date(dateOrMs);
+  const hour = String(d.getHours()).padStart(2, "0");
+  const minute = String(d.getMinutes()).padStart(2, "0");
+  return `${hour}:${minute}`;
+}
+
+export function formatHeaderLine({ name = "resource-monitor-axi", time, live = 0, stale = 0, columns = 80 }) {
+  const counts = [`${live} live`, ...(stale > 0 ? [`${stale} stale`] : [])];
   const room = columns - 2;
-  const one = ["resource-monitor-axi", time, `${intervalS}s`, ...counts].join(" · ");
-  if (width(one) <= room) return [one];
-  const top = ["resource-monitor-axi", time, `every ${intervalS}s`];
-  return [
-    firstFit([top.join(" · "), ["resource-monitor-axi", time, `${intervalS}s`].join(" · "), [time, `every ${intervalS}s`].join(" · ")], room),
-    countsText(v, stale, room),
+  const candidates = [
+    [name, time, ...counts].filter(Boolean).join(" · "),
+    [name, ...counts].join(" · "),
+    ...(time ? [[time, ...counts].join(" · ")] : []),
+    counts.join(" · "),
   ];
+  return firstFit(candidates, room);
 }
 
 /** The verdict levels of the hosts that count towards the totals. */
@@ -464,9 +467,14 @@ export function hostLevels(states) {
  * The card view as a pinned header and a scrollable body. Picks the roomiest
  * card shape whose total height fits.
  */
-export function cardsFrame(states, { columns = 80, rows, intervalS = 15, now = Date.now() } = {}) {
+export function cardsFrame(states, { columns = 80, rows, intervalS = 15, now = Date.now(), allStates } = {}) {
   const w = Math.max(MIN_CARD_WIDTH, Math.min(CARD_WIDTH, columns));
-  const header = headerLines(states, hostLevels(states), intervalS, now, columns).map((text) => [{ text: `  ${text}`, style: "dim" }]);
+  const monitored = allStates ?? states;
+  const live = monitored.filter((st) => st.sample && !st.error).length;
+  const stale = monitored.filter((st) => st.error || !st.sample).length;
+  const time = formatQueryTime(now);
+  const line = formatHeaderLine({ time, live, stale, columns });
+  const header = [[{ text: `  ${line}`, style: "dim" }]];
 
   const build = (shape) => layout(states.map((st) => buildCard(st, w, shape, now)), w, columns);
   // The one-row shape is a plain list, so it bypasses the box layout.
@@ -499,10 +507,13 @@ export function composeFrame({ header, body }, { columns = 80, rows, scroll = 0,
     if (at >= 0) {
       const text = header[at].map((seg) => seg.text).join("");
       const room = Math.max(0, columns - width(suffix));
-      // Counts of zero go first, then the name, so the numbers that matter stay whole.
-      const noZeros = text.replace(/(?<= )0 (free|busy|saturated|stale)( · )?/g, "").replace(/ · $/, "");
-      const short = width(noZeros) <= room ? noZeros : noZeros.replace("resource-monitor-axi · ", "");
-      head = header.with(at, [{ text: `${width(text) <= room ? text : fit(short, room)}${suffix}`, style: "dim" }]);
+      const candidates = [
+        text,
+        text.replace(/^  resource-monitor-axi · /, "  "),
+        text.replace(/^  resource-monitor-axi · \d\d:\d\d · /, "  "),
+      ];
+      const best = firstFit(candidates, room);
+      head = header.with(at, [{ text: `${best}${suffix}`, style: "dim" }]);
     }
   }
   const lines = [...head, ...body.slice(top, top + view)];
@@ -514,6 +525,6 @@ export function composeFrame({ header, body }, { columns = 80, rows, scroll = 0,
 }
 
 /** Render the card panel for `states`, sized to `columns` x `rows` (rows optional). */
-export function renderPanel(states, { columns = 80, rows, intervalS = 15, now = Date.now(), depth = "none", theme = "dark", scroll = 0 } = {}) {
-  return composeFrame(cardsFrame(states, { columns, rows, intervalS, now }), { columns, rows, scroll, depth, theme }).text;
+export function renderPanel(states, { columns = 80, rows, intervalS = 15, now = Date.now(), depth = "none", theme = "dark", scroll = 0, allStates } = {}) {
+  return composeFrame(cardsFrame(states, { columns, rows, intervalS, now, allStates }), { columns, rows, scroll, depth, theme }).text;
 }

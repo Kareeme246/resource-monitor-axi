@@ -6,10 +6,9 @@ live panel for people, built to run in a second terminal, stacked above or below
 borrows its look: rounded text boxes, muted labels, a dim status header.
 
 ```
-  resource-monitor-axi · 15s · 1h
-  0 free · 1 busy · 0 saturated · 0 stale
+  resource-monitor-axi · 10:09 · 2 live
 
-● build-box.local · M5 Mac
+● build-box · M5 Mac
 ╭─ cpu ─────────────────────────────────── 16% ─╮
 │    ▃▇▅▃████▃▁▂▂▆▃███   ▁       ██▂    ███     │
 │   ▁█████████████████▅▄▄█▆▅▅  ▁ ███▆▃  ███▇▄   │
@@ -73,27 +72,30 @@ They last until you quit; to change what it opens with, use the config.
 
 ### Config
 
-`~/.config/resource-monitor-axi/config.json` (or `$XDG_CONFIG_HOME`, or
-`RESOURCE_MONITOR_AXI_CONFIG`). Without a file the host list is `build-box.local`.
+`~/.config/resource-monitor-axi/config.yaml` (or `$XDG_CONFIG_HOME`, or
+`RESOURCE_MONITOR_AXI_CONFIG`). Without a file no remote hosts are configured and it monitors the local machine only.
 `resource-monitor-axi init` writes a starter file, and
-[`config.example.json`](config.example.json) shows every setting. The file is read at
+[`config.example.yaml`](config.example.yaml) shows every setting. The file is read at
 start, so restart the panel after editing it.
 
-```json
-{
-  "hosts": [
-    "my-mac",
-    { "host": "build-box", "label": "Build box", "simCeiling": 4 },
-    "linux-server"
-  ],
-  "local": { "label": "laptop", "simCeiling": 2 },
-  "interval": 15,
-  "window": "1h"
-}
+```yaml
+hosts:
+  - my-mac
+  - host: build-box
+    label: Build box
+    simCeiling: 4
+  - linux-server
+
+local:
+  label: laptop
+  simCeiling: 2
+
+interval: 15
+window: 1h
 ```
 
 This machine is monitored too, without ssh. `local` sets its label and simulator ceiling,
-and `"local": false` stops sampling it. `hosts` may be left out or empty to watch only this
+and `local: false` stops sampling it. `hosts` may be left out or empty to watch only this
 machine.
 
 Hosts are `~/.ssh/config` aliases, so keys, users, jump hosts and ports are
@@ -108,8 +110,8 @@ has passed, and a slow host does not delay the others.
 
 The panel samples this machine and every server all the time, so `v` switches between them
 at once with their charts already drawn. It opens on the servers, or on this machine when
-none are configured, and `v` then has nothing to switch to and leaves the key. Each view's
-header counts only what it shows. This machine reads the same `sh` script as a host, piped
+none are configured, and `v` then has nothing to switch to and leaves the key. The
+header reports total live and stale machines across the monitored fleet. This machine reads the same `sh` script as a host, piped
 to `sh -s` with no ssh, and keeps its history in `_local.jsonl`.
 
 ### History
