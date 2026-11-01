@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { formatHeaderLine, formatQueryTime, renderPanel } from "../src/render.js";
+import { formatHeaderLine, formatHeaderLines, formatQueryTime, renderPanel } from "../src/render.js";
 import { snapshotData } from "../src/cli.js";
 
 const sample = { os: "Darwin", chip: "Apple M4 Pro", cores: 14, cpuPct: 62, load1: 4, load5: 4, memPct: 40, memPressure: "normal", gpuPct: 20, diskPct: 44, diskFreeGB: 259, sims: 1, xcodebuild: 1 };
@@ -80,10 +80,17 @@ test("snapshot rows mark unreachable hosts and keep the others", () => {
   assert.deepEqual([rows[1].status, rows[1].verdict, rows[1].error], ["unreachable", null, "host not found"]);
 });
 
-test("formatHeaderLine always reports 0 stale and preserves clock time across widths", () => {
+test("formatHeaderLine wraps onto further lines instead of dropping parts across widths", () => {
   assert.equal(formatHeaderLine({ time: "11:25", live: 2, stale: 0, columns: 80 }), "resource-monitor-axi · 11:25 · 2 live · 0 stale");
-  assert.equal(formatHeaderLine({ time: "11:25", live: 2, stale: 0, columns: 40 }), "11:25 · 2 live · 0 stale");
-  assert.equal(formatHeaderLine({ time: "11:25", live: 2, stale: 0, columns: 30 }), "11:25 · 2 live · 0 stale");
+  assert.deepEqual(formatHeaderLines({ time: "11:25", live: 2, stale: 0, columns: 80 }), ["resource-monitor-axi · 11:25 · 2 live · 0 stale"]);
+
+  assert.equal(formatHeaderLine({ time: "11:25", live: 2, stale: 0, columns: 49 }), "resource-monitor-axi · 11:25 · 2 live · 0 stale");
+  assert.deepEqual(formatHeaderLines({ time: "11:25", live: 2, stale: 0, columns: 49 }), ["resource-monitor-axi · 11:25 · 2 live · 0 stale"]);
+
+  assert.equal(formatHeaderLine({ time: "11:25", live: 2, stale: 0, columns: 37 }), "resource-monitor-axi\n11:25 · 2 live · 0 stale");
+  assert.deepEqual(formatHeaderLines({ time: "11:25", live: 2, stale: 0, columns: 37 }), ["resource-monitor-axi", "11:25 · 2 live · 0 stale"]);
+
+  assert.deepEqual(formatHeaderLines({ time: "11:25", live: 2, stale: 0, columns: 25 }), ["resource-monitor-axi", "11:25 · 2 live", "0 stale"]);
   assert.equal(formatHeaderLine({ time: "11:25", live: 2, stale: 1, columns: 80 }), "resource-monitor-axi · 11:25 · 2 live · 1 stale");
 });
 

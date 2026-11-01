@@ -7,7 +7,7 @@
  * draws the latest reading, and takes the slice's peak only when it closes.
  */
 import { INTERVALS, WINDOWS } from "./config.js";
-import { CARD_WIDTH, HEALTH, HEALTH_BOLD, MIN_CARD_WIDTH, ago, cardsFrame, composeFrame, countsText, firstFit, fit, flow, formatHeaderLine, formatQueryTime, hostLevels, lineWidth, coalesce, shortChip, width, words } from "./render.js";
+import { CARD_WIDTH, HEALTH, HEALTH_BOLD, MIN_CARD_WIDTH, ago, cardsFrame, composeFrame, countsText, firstFit, fit, flow, formatHeaderLine, formatHeaderLines, formatQueryTime, hostLevels, lineWidth, coalesce, shortChip, width, words } from "./render.js";
 import { THRESHOLDS, loadPerCore, usageLevel, verdict } from "./verdict.js";
 
 /** Below this width boxes stack; from it they pair up; from the next they sit four across. */
@@ -306,9 +306,10 @@ function chartHeader(states, { columns, now, roomy, allStates }) {
   const live = monitored.filter((st) => st.sample && !st.error).length;
   const stale = monitored.filter((st) => st.error || !st.sample).length;
   const time = formatQueryTime(now);
-  const line = formatHeaderLine({ time, live, stale, columns });
+  const lines = formatHeaderLines({ time, live, stale, columns });
   const toLine = (text) => [{ text: `  ${text}`, style: "dim" }];
-  return roomy ? [toLine(line), []] : [toLine(line)];
+  const head = lines.map(toLine);
+  return roomy ? [...head, []] : head;
 }
 
 /**

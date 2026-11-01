@@ -366,3 +366,98 @@ finally:
   assert.equal(res.code, 0, res.err);
   assert.match(res.out, /PTY_OK/);
 });
+
+test("interactive panel in pseudo-terminal at 37 columns by 31 rows wraps header onto two lines", async () => {
+  const { spawn } = await import("node:child_process");
+  const pyCode = `
+import pty, os, subprocess, time, select, tempfile, shutil, fcntl, termios, struct, threading, re
+
+d = tempfile.mkdtemp()
+try:
+    bin_dir = os.path.join(d, 'bin')
+    os.makedirs(bin_dir)
+    ssh_path = os.path.join(bin_dir, 'ssh')
+    sample_file = os.path.join(d, 'sample_count')
+    with open(sample_file, 'w') as f:
+        f.write('0')
+
+    with open(ssh_path, 'w') as f:
+        f.write(f'''#!/bin/sh
+case "$*" in
+*-O*exit*) exit 0 ;;
+*)
+  cat >/dev/null
+  cnt=$(cat {sample_file})
+  cnt=$((cnt + 1))
+  echo "$cnt" > {sample_file}
+  printf "os=Darwin\\\\ncores=4\\\\nchip=M4\\\\nload=1 1 1\\\\nmemfree=70\\\\npressure=1\\\\ndisk=1000 500\\\\ngpu=5\\\\nsims=0\\\\nxcodebuild=0\\\\ncpu=10\\\\nend=1\\\\n"
+;;
+esac
+''')
+    os.chmod(ssh_path, 0o755)
+
+    cfg_path = os.path.join(d, 'config.yaml')
+    with open(cfg_path, 'w') as f:
+        f.write('hosts:\\n  - ptybox\\nlocal: false\\ninterval: 60\\n')
+
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 31, 37, 0, 0))
+    env = dict(os.environ)
+    env['PATH'] = f"{bin_dir}:{env['PATH']}"
+    env['RESOURCE_MONITOR_AXI_CONFIG'] = cfg_path
+
+    proc = subprocess.Popen(
+        ['node', 'bin/resource-monitor-axi.js', '--tui', '--interval', '60'],
+        stdin=slave, stdout=slave, stderr=slave, env=env, close_fds=True
+    )
+    os.close(slave)
+
+    chunks = []
+    stop_drain = False
+    def drain():
+        while not stop_drain:
+            r, _, _ = select.select([master], [], [], 0.02)
+            if r:
+                try:
+                    c = os.read(master, 4096)
+                    if not c: break
+                    chunks.append(c)
+                except OSError:
+                    break
+
+    t = threading.Thread(target=drain)
+    t.daemon = True
+    t.start()
+
+    time.sleep(0.5)
+    os.write(master, b'q')
+    proc.wait(timeout=3)
+    stop_drain = True
+    os.close(master)
+
+    raw = b''.join(chunks).decode('utf-8', errors='replace')
+    clean = re.sub(r'\\x1b\\[[0-9;?]*[a-zA-Z]', '', raw)
+    clean = re.sub(r'\\x1b\\([AB012]', '', clean)
+    clean = clean.replace('\\r', '')
+    frames = [f for f in clean.split('\\x1b[2J') if f.strip()]
+    last_frame = frames[-1] if frames else clean
+    lines = [line for line in last_frame.split('\\n')]
+
+    assert lines[0] == '  resource-monitor-axi', f"Expected header line 0 to be '  resource-monitor-axi', got {lines[0]!r}"
+    assert re.match(r'^  \\d\\d:\\d\\d · \\d live · \\d stale$', lines[1]), f"Expected header line 1 to match counts, got {lines[1]!r}"
+    assert lines[2] == '', f"Expected blank line under header, got {lines[2]!r}"
+    print("PTY_37X31_OK")
+finally:
+    shutil.rmtree(d, ignore_errors=True)
+`;
+  const res = await new Promise((resolve) => {
+    const cp = spawn("python3", ["-c", pyCode], { stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    let err = "";
+    cp.stdout.on("data", (d) => (out += d));
+    cp.stderr.on("data", (d) => (err += d));
+    cp.on("close", (code) => resolve({ code, out, err }));
+  });
+  assert.equal(res.code, 0, res.err);
+  assert.match(res.out, /PTY_37X31_OK/);
+});

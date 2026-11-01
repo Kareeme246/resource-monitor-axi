@@ -127,7 +127,71 @@ test("a short pane scrolls instead of hiding hosts, and the header stays pinned"
   assert.equal(tiny.text.split("\n").length, 6);
   assert.equal(tiny.maxScroll > 0, true);
   const crowded = renderFrame([live, second], { columns: 34, rows: 25, now: NOW });
-  assert.match(crowded.text.split("\n").find((l) => l.includes("↓")), /^ {2}\d\d:\d\d · 2 live · 0 stale · ↓\d+$|^ {2}2 live · 0 stale · ↓\d+$/);
+  assert.equal(crowded.text.split("\n")[0], "  resource-monitor-axi");
+  assert.match(crowded.text.split("\n").find((l) => l.includes("↓")), /^ {2}\d\d:\d\d · 2 live · 0 stale · ↓\d+$/);
+});
+
+test("header wraps instead of dropping parts at 37, 49, and 80 columns, including scrolled panes", () => {
+  const second = { ...live, label: "mini" };
+
+  // 80 columns: full single line
+  const f80 = renderFrame([live, second], { columns: 80, rows: 31, now: NOW });
+  const lines80 = f80.text.split("\n");
+  assert.match(lines80[0], /^ {2}resource-monitor-axi · \d\d:\d\d · 2 live · 0 stale$/);
+  assert.equal(lines80[1], "");
+
+  // 80 columns scrolled: marks on single line
+  const f80s = renderFrame([live, second], { columns: 80, rows: 15, now: NOW });
+  assert.match(f80s.text.split("\n")[0], /^ {2}resource-monitor-axi · \d\d:\d\d · 2 live · 0 stale · ↓\d+$/);
+
+  // 49 columns: fits on single line without marks
+  const f49 = renderFrame([live], { columns: 49, rows: 31, now: NOW });
+  const lines49 = f49.text.split("\n");
+  assert.match(lines49[0], /^ {2}resource-monitor-axi · \d\d:\d\d · 1 live · 0 stale$/);
+  assert.equal(lines49[1], "");
+
+  // 49 columns scrolled: wraps onto 2 lines, name first, marks on last header line
+  const f49s = renderFrame([live, second], { columns: 49, rows: 20, now: NOW });
+  const lines49s = f49s.text.split("\n");
+  assert.equal(lines49s[0], "  resource-monitor-axi");
+  assert.match(lines49s[1], /^ {2}\d\d:\d\d · 2 live · 0 stale · ↓\d+$/);
+
+  // 37 columns: wraps onto 2 lines, name first, preserving blank line when roomy
+  const f37 = renderFrame([live], { columns: 37, rows: 31, now: NOW });
+  const lines37 = f37.text.split("\n");
+  assert.equal(lines37[0], "  resource-monitor-axi");
+  assert.match(lines37[1], /^ {2}\d\d:\d\d · 1 live · 0 stale$/);
+  assert.equal(lines37[2], "");
+
+  // 37 columns scrolled: wraps onto 2 lines, marks on second line, pinned header & body reaches last line
+  const f37s = renderFrame([live, second], { columns: 37, rows: 25, now: NOW });
+  const lines37s = f37s.text.split("\n");
+  assert.equal(lines37s[0], "  resource-monitor-axi");
+  assert.match(lines37s[1], /^ {2}\d\d:\d\d · 2 live · 0 stale · ↓\d+$/);
+  assert.equal(lines37s.length, 25);
+
+  // Scrolled to bottom reaches the last body line in height layout
+  const f37b = renderFrame([live, second], { columns: 37, rows: 25, now: NOW, scroll: 9999 });
+  const lines37b = f37b.text.split("\n");
+  assert.equal(lines37b[0], "  resource-monitor-axi");
+  assert.match(lines37b[1], /^ {2}\d\d:\d\d · 2 live · 0 stale · ↑\d+$/);
+  assert.equal(lines37b.length, 25);
+  assert.equal(f37b.scroll, f37s.maxScroll);
+
+  // Cards view at 37 columns
+  const fCards = renderFrame([live, second], { view: "cards", columns: 37, rows: 31, now: NOW });
+  const cardsLines = fCards.text.split("\n");
+  assert.equal(cardsLines[0], "  resource-monitor-axi");
+  assert.match(cardsLines[1], /^ {2}\d\d:\d\d · 2 live · 0 stale$/);
+
+  // Both v views (local and servers) at 37 columns
+  const fLocal = renderFrame([live], { columns: 37, rows: 31, now: NOW, toggle: "servers", allStates: [live, second] });
+  assert.equal(fLocal.text.split("\n")[0], "  resource-monitor-axi");
+  assert.match(fLocal.text.split("\n")[1], /^ {2}\d\d:\d\d · 2 live · 0 stale$/);
+
+  const fServers = renderFrame([second], { columns: 37, rows: 31, now: NOW, toggle: "local", allStates: [live, second] });
+  assert.equal(fServers.text.split("\n")[0], "  resource-monitor-axi");
+  assert.match(fServers.text.split("\n")[1], /^ {2}\d\d:\d\d · 2 live · 0 stale$/);
 });
 
 test("an unreachable host is dim with reason and age, keeps its chart and leaves the totals", () => {
