@@ -133,6 +133,48 @@ test("c switches views, v switches between this machine and the servers, w cycle
   assert.equal(applyKey("\t", ui, range), false, "tab no longer does anything");
 });
 
+test("applyKey handles mouse wheel scrolling in SGR mode and ignores clicks or releases", () => {
+  const ui = { scroll: 0, view: "charts", scope: "servers" };
+  const range = { page: 10, maxScroll: 15 };
+
+  // SGR wheel down scrolls down by 1
+  assert.equal(applyKey("\x1b[<65;20;10M", ui, range), true);
+  assert.equal(ui.scroll, 1);
+  assert.equal(applyKey("\x1b[<65;1;1M", ui, range), true);
+  assert.equal(ui.scroll, 2);
+
+  // SGR wheel up scrolls up by 1
+  assert.equal(applyKey("\x1b[<64;20;10M", ui, range), true);
+  assert.equal(ui.scroll, 1);
+  assert.equal(applyKey("\x1b[<64;1;1M", ui, range), true);
+  assert.equal(ui.scroll, 0);
+
+  // Wheel up at top stays at 0
+  assert.equal(applyKey("\x1b[<64;1;1M", ui, range), true);
+  assert.equal(ui.scroll, 0);
+
+  // SGR release (m) is ignored
+  assert.equal(applyKey("\x1b[<64;20;10m", ui, range), false);
+  assert.equal(applyKey("\x1b[<65;20;10m", ui, range), false);
+  assert.equal(ui.scroll, 0);
+
+  // Left/right clicks or motion are ignored
+  assert.equal(applyKey("\x1b[<0;20;10M", ui, range), false);
+  assert.equal(applyKey("\x1b[<2;20;10M", ui, range), false);
+  assert.equal(applyKey("\x1b[<35;20;10M", ui, range), false);
+  assert.equal(ui.scroll, 0);
+
+  // Wheel with modifier (e.g. Shift 65+4 = 69)
+  assert.equal(applyKey("\x1b[<69;20;10M", ui, range), true);
+  assert.equal(ui.scroll, 1);
+
+  // String aliases wheeldown and wheelup
+  assert.equal(applyKey("wheeldown", ui, range), true);
+  assert.equal(ui.scroll, 2);
+  assert.equal(applyKey("wheelup", ui, range), true);
+  assert.equal(ui.scroll, 1);
+});
+
 test("arguments route onto commands the SDK understands", () => {
   assert.deepEqual(normalizeArgv([]), []);
   assert.deepEqual(normalizeArgv(["init", "--help"]), ["init", "--help"]);

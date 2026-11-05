@@ -436,15 +436,15 @@ esac
     os.close(master)
 
     raw = b''.join(chunks).decode('utf-8', errors='replace')
-    clean = re.sub(r'\\x1b\\[[0-9;?]*[a-zA-Z]', '', raw)
+    frames = [f for f in raw.split('\\x1b[H') if f.strip()]
+    last_frame = frames[-1] if frames else raw
+    clean = re.sub(r'\\x1b\\[<?[0-9;?]*[a-zA-Z~]', '', last_frame)
     clean = re.sub(r'\\x1b\\([AB012]', '', clean)
     clean = clean.replace('\\r', '')
-    frames = [f for f in clean.split('\\x1b[2J') if f.strip()]
-    last_frame = frames[-1] if frames else clean
-    lines = [line for line in last_frame.split('\\n')]
+    lines = [line for line in clean.split('\\n')]
 
-    assert lines[0] == '  resource-monitor-axi', f"Expected header line 0 to be '  resource-monitor-axi', got {lines[0]!r}"
-    assert re.match(r'^  \\d\\d:\\d\\d · \\d live · \\d stale$', lines[1]), f"Expected header line 1 to match counts, got {lines[1]!r}"
+    assert re.match(r'^  resource-monitor-axi · \\d\\d:\\d\\d$', lines[0]), f"Expected header line 0 to have name and time, got {lines[0]!r}"
+    assert re.match(r'^  \\d live · \\d stale$', lines[1]), f"Expected header line 1 to have counts, got {lines[1]!r}"
     assert lines[2] == '', f"Expected blank line under header, got {lines[2]!r}"
     print("PTY_37X31_OK")
 finally:
@@ -460,4 +460,103 @@ finally:
   });
   assert.equal(res.code, 0, res.err);
   assert.match(res.out, /PTY_37X31_OK/);
+});
+
+test("interactive panel in pseudo-terminal scrolls body on mouse wheel SGR sequence with header pinned", async () => {
+  const { spawn } = await import("node:child_process");
+  const pyCode = `
+import pty, os, subprocess, time, select, tempfile, shutil, fcntl, termios, struct, threading, re
+
+d = tempfile.mkdtemp()
+try:
+    bin_dir = os.path.join(d, 'bin')
+    os.makedirs(bin_dir)
+    ssh_path = os.path.join(bin_dir, 'ssh')
+    with open(ssh_path, 'w') as f:
+        f.write('''#!/bin/sh
+case "$*" in
+*-O*exit*) exit 0 ;;
+*)
+  cat >/dev/null
+  printf "os=Darwin\\\\ncores=4\\\\nchip=M4\\\\nload=1 1 1\\\\nmemfree=70\\\\npressure=1\\\\ndisk=1000 500\\\\ngpu=5\\\\nsims=0\\\\nxcodebuild=0\\\\ncpu=10\\\\nend=1\\\\n"
+;;
+esac
+''')
+    os.chmod(ssh_path, 0o755)
+
+    cfg_path = os.path.join(d, 'config.yaml')
+    with open(cfg_path, 'w') as f:
+        f.write('hosts:\\n  - h1\\n  - h2\\nlocal: false\\ninterval: 60\\n')
+
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 45, 0, 0))
+    env = dict(os.environ)
+    env['PATH'] = f"{bin_dir}:{env['PATH']}"
+    env['RESOURCE_MONITOR_AXI_CONFIG'] = cfg_path
+
+    proc = subprocess.Popen(
+        ['node', 'bin/resource-monitor-axi.js', '--tui', '--interval', '60'],
+        stdin=slave, stdout=slave, stderr=slave, env=env, close_fds=True
+    )
+    os.close(slave)
+
+    chunks = []
+    stop_drain = False
+    def drain():
+        while not stop_drain:
+            r, _, _ = select.select([master], [], [], 0.02)
+            if r:
+                try:
+                    c = os.read(master, 4096)
+                    if not c: break
+                    chunks.append(c)
+                except OSError:
+                    break
+
+    t = threading.Thread(target=drain)
+    t.daemon = True
+    t.start()
+
+    time.sleep(0.6)
+    # Send SGR mouse wheel down (button 65) twice
+    wheel_down = bytes([27]) + b'[<65;20;10M'
+    os.write(master, wheel_down)
+    time.sleep(0.1)
+    os.write(master, wheel_down)
+    time.sleep(0.3)
+    os.write(master, b'q')
+    proc.wait(timeout=3)
+    stop_drain = True
+    os.close(master)
+
+    raw_bytes = b''.join(chunks)
+    assert b'\\x1b[?1000h\\x1b[?1006h' in raw_bytes or (bytes([27]) + b'[?1000h' + bytes([27]) + b'[?1006h') in raw_bytes, "Expected mouse reporting to be enabled"
+    assert b'\\x1b[?1006l\\x1b[?1000l' in raw_bytes or (bytes([27]) + b'[?1006l' + bytes([27]) + b'[?1000l') in raw_bytes, "Expected mouse reporting to be disabled on exit"
+
+    raw = raw_bytes.decode('utf-8', errors='replace')
+
+    frames = [f for f in raw.split('\\x1b[H') if f.strip()]
+    last_frame = frames[-1] if frames else raw
+    clean = re.sub(r'\\x1b\\[<?[0-9;?]*[a-zA-Z~]', '', last_frame)
+    clean = re.sub(r'\\x1b\\([AB012]', '', clean)
+    clean = clean.replace('\\r', '')
+    lines = [line for line in clean.split('\\n')]
+
+    # Pinned header on lines 0 and 1 with greedy wrap and scroll mark
+    assert re.match(r'^  resource-monitor-axi · \\d\\d:\\d\\d · \\d live$', lines[0]), f"Expected header line 0 to have name, time and live count, got {lines[0]!r}"
+    assert '↑2' in lines[1], f"Expected scroll mark ↑2 from 2 wheel down events, got {lines[1]!r}"
+    print("PTY_WHEEL_SCROLL_OK")
+finally:
+    shutil.rmtree(d, ignore_errors=True)
+`;
+  const res = await new Promise((resolve) => {
+    const cp = spawn("python3", ["-c", pyCode], { stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    let err = "";
+    cp.stdout.on("data", (d) => (out += d));
+    cp.stderr.on("data", (d) => (err += d));
+    cp.on("close", (code) => resolve({ code, out, err }));
+  });
+  assert.equal(res.code, 0, res.err);
+  assert.match(res.out, /PTY_WHEEL_SCROLL_OK/);
 });

@@ -87,11 +87,45 @@ test("formatHeaderLine wraps onto further lines instead of dropping parts across
   assert.equal(formatHeaderLine({ time: "11:25", live: 2, stale: 0, columns: 49 }), "resource-monitor-axi · 11:25 · 2 live · 0 stale");
   assert.deepEqual(formatHeaderLines({ time: "11:25", live: 2, stale: 0, columns: 49 }), ["resource-monitor-axi · 11:25 · 2 live · 0 stale"]);
 
-  assert.equal(formatHeaderLine({ time: "11:25", live: 2, stale: 0, columns: 37 }), "resource-monitor-axi\n11:25 · 2 live · 0 stale");
-  assert.deepEqual(formatHeaderLines({ time: "11:25", live: 2, stale: 0, columns: 37 }), ["resource-monitor-axi", "11:25 · 2 live · 0 stale"]);
+  assert.equal(formatHeaderLine({ time: "11:25", live: 2, stale: 0, columns: 45 }), "resource-monitor-axi · 11:25 · 2 live\n0 stale");
+  assert.deepEqual(formatHeaderLines({ time: "11:25", live: 2, stale: 0, columns: 45 }), ["resource-monitor-axi · 11:25 · 2 live", "0 stale"]);
+
+  assert.equal(formatHeaderLine({ time: "11:25", live: 2, stale: 0, columns: 37 }), "resource-monitor-axi · 11:25\n2 live · 0 stale");
+  assert.deepEqual(formatHeaderLines({ time: "11:25", live: 2, stale: 0, columns: 37 }), ["resource-monitor-axi · 11:25", "2 live · 0 stale"]);
 
   assert.deepEqual(formatHeaderLines({ time: "11:25", live: 2, stale: 0, columns: 25 }), ["resource-monitor-axi", "11:25 · 2 live", "0 stale"]);
   assert.equal(formatHeaderLine({ time: "11:25", live: 2, stale: 1, columns: 80 }), "resource-monitor-axi · 11:25 · 2 live · 1 stale");
+});
+
+test("formatHeaderLines greedily fills the first line instead of prematurely wrapping on name", () => {
+  // At width 45 (room 43): name (20) + time (8) + 2 live (9) = 37 chars fits on line 1, only 0 stale wraps
+  const lines45 = formatHeaderLines({ time: "11:25", live: 2, stale: 0, columns: 45 });
+  assert.deepEqual(lines45, [
+    "resource-monitor-axi · 11:25 · 2 live",
+    "0 stale",
+  ]);
+
+  // At width 40 (room 38): name + time + 2 live (37 chars) still fits on line 1
+  const lines40 = formatHeaderLines({ time: "11:25", live: 2, stale: 0, columns: 40 });
+  assert.deepEqual(lines40, [
+    "resource-monitor-axi · 11:25 · 2 live",
+    "0 stale",
+  ]);
+
+  // At width 37 (room 35): name + time (28 chars) fits on line 1, live and stale wrap
+  const lines37 = formatHeaderLines({ time: "11:25", live: 2, stale: 0, columns: 37 });
+  assert.deepEqual(lines37, [
+    "resource-monitor-axi · 11:25",
+    "2 live · 0 stale",
+  ]);
+
+  // At width 25 (room 23): name fits on line 1, time + live on line 2, stale on line 3
+  const lines25 = formatHeaderLines({ time: "11:25", live: 2, stale: 0, columns: 25 });
+  assert.deepEqual(lines25, [
+    "resource-monitor-axi",
+    "11:25 · 2 live",
+    "0 stale",
+  ]);
 });
 
 test("formatQueryTime formats in the machine's 24h time and handles midnight", () => {

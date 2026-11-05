@@ -487,15 +487,6 @@ export function formatHeaderLines({ name = "resource-monitor-axi", time, live = 
   const counts = [`${live} live`, `${stale} stale`];
   const parts = [name, time, ...counts].filter(Boolean);
   const room = Math.max(1, columns - 2);
-  const full = parts.join(" · ");
-  if (width(full) <= room) return [full];
-
-  if (name) {
-    const nameLines = wrapParts([name], room);
-    const rest = [time, ...counts].filter(Boolean);
-    const restLines = wrapParts(rest, room);
-    return [...nameLines, ...restLines];
-  }
   return wrapParts(parts, room);
 }
 
@@ -563,14 +554,7 @@ export function composeFrame({ header, body }, { columns = 80, rows, scroll = 0,
         const room = Math.max(1, columns - 2);
         const raw = text.replace(/^ {2}/, "");
         const parts = [...raw.split(" · "), marks];
-        let wrapped;
-        if (at === 0 && parts.length > 1) {
-          const nameLines = wrapParts([parts[0]], room);
-          const restLines = wrapParts(parts.slice(1), room);
-          wrapped = [...nameLines, ...restLines];
-        } else {
-          wrapped = wrapParts(parts, room);
-        }
+        const wrapped = wrapParts(parts, room);
         const newLines = wrapped.map((l) => [{ text: `  ${l}`, style: "dim" }]);
         head = [...header.slice(0, at), ...newLines, ...header.slice(at + 1)];
       }
@@ -584,10 +568,17 @@ export function composeFrame({ header, body }, { columns = 80, rows, scroll = 0,
         const lastAt = head.findLastIndex((line) => line.length > 0);
         if (lastAt >= 0) {
           const lastText = head[lastAt].map((seg) => seg.text).join("");
-          const cutLen = width(` · ${marks}`);
-          const base = lastText.endsWith(` · ${marks}`) ? lastText.slice(0, -cutLen) : lastText;
-          const updatedText = newMarks ? `${base} · ${newMarks}` : base;
-          head = head.with(lastAt, [{ text: updatedText, style: "dim" }]);
+          if (lastText.endsWith(` · ${marks}`)) {
+            const cutLen = width(` · ${marks}`);
+            const base = lastText.slice(0, -cutLen);
+            const updatedText = newMarks ? `${base} · ${newMarks}` : base;
+            head = head.with(lastAt, [{ text: updatedText, style: "dim" }]);
+          } else if (lastText.endsWith(marks)) {
+            const cutLen = width(marks);
+            const base = lastText.slice(0, -cutLen);
+            const updatedText = newMarks ? `${base}${newMarks}` : base;
+            head = head.with(lastAt, [{ text: updatedText, style: "dim" }]);
+          }
         }
       }
     }

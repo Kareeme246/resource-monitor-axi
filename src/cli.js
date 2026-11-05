@@ -232,7 +232,7 @@ export function hydrate(state, intervalS, { now = Date.now(), path = historyPath
 }
 
 /** A chunk of terminal input as single keys and whole escape sequences. */
-const splitKeys = (text) => text.match(/\x1b\[[0-9;]*[A-Za-z~]|[\s\S]/g) ?? [];
+const splitKeys = (text) => text.match(/\x1b\[<?[0-9;]*[A-Za-z~]|[\s\S]/g) ?? [];
 
 const SCROLL_KEYS = {
   j: 1,
@@ -246,6 +246,8 @@ const SCROLL_KEYS = {
   "\x1b[H": "top",
   G: "bottom",
   "\x1b[F": "bottom",
+  wheeldown: 1,
+  wheelup: -1,
 };
 
 /** Apply one key to the view state. Returns true when it should repaint. */
@@ -273,7 +275,18 @@ export function applyKey(key, ui, { page = 10, maxScroll = 0, onRefresh = ui?.on
     ui.intervalS = nextInCycle(INTERVALS, ui.intervalS);
     return true;
   }
-  const move = SCROLL_KEYS[key];
+  let move = SCROLL_KEYS[key];
+  if (move === undefined) {
+    const mouse = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/.exec(key);
+    if (mouse) {
+      const [_, btn, , , type] = mouse;
+      if (type === "M") {
+        const b = Number(btn);
+        if ((b & ~28) === 64) move = -1;
+        else if ((b & ~28) === 65) move = 1;
+      }
+    }
+  }
   if (move === undefined) return false;
   const next =
     move === "page" ? ui.scroll + page : move === "-page" ? ui.scroll - page : move === "top" ? 0 : move === "bottom" ? maxScroll : ui.scroll + move;
@@ -281,8 +294,10 @@ export function applyKey(key, ui, { page = 10, maxScroll = 0, onRefresh = ui?.on
   return true;
 }
 
-const ENTER_SCREEN = "\x1b[?1049h\x1b[?25l";
-const LEAVE_SCREEN = "\x1b[?25h\x1b[?1049l";
+const MOUSE_ON = "\x1b[?1000h\x1b[?1006h";
+const MOUSE_OFF = "\x1b[?1006l\x1b[?1000l";
+const ENTER_SCREEN = `\x1b[?1049h\x1b[?25l${MOUSE_ON}`;
+const LEAVE_SCREEN = `\x1b[?25h\x1b[?1049l${MOUSE_OFF}`;
 const CLEAR = "\x1b[H\x1b[2J";
 
 export async function panel(remotes, local, { theme, depth, ui, stdout = process.stdout, stdin = process.stdin } = {}) {
@@ -330,10 +345,30 @@ export async function panel(remotes, local, { theme, depth, ui, stdout = process
   };
   ui.onRefresh = triggerRefresh;
 
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    try {
+      out.write(LEAVE_SCREEN);
+    } catch {}
+    out.off("resize", redraw);
+    process.off("SIGINT", stop);
+    process.off("SIGTERM", stop);
+    process.off("exit", cleanup);
+    process.off("uncaughtExceptionMonitor", cleanup);
+    if (stdin.isTTY) {
+      stdin.setRawMode?.(false);
+      stdin.pause?.();
+    }
+  };
+
   out.write(ENTER_SCREEN);
   out.on("resize", redraw);
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
+  process.once("exit", cleanup);
+  process.once("uncaughtExceptionMonitor", cleanup);
   if (stdin.isTTY) {
     stdin.setRawMode?.(true);
     stdin.resume?.();
@@ -380,15 +415,11 @@ export async function panel(remotes, local, { theme, depth, ui, stdout = process
   }
   // Keep the "stale 42s" ages and the chart's clock moving between samples.
   const clock = setInterval(draw, 1000);
-  await stopped;
-  clearInterval(clock);
-  process.off("SIGINT", stop);
-  process.off("SIGTERM", stop);
-  out.write(LEAVE_SCREEN);
-  out.off("resize", redraw);
-  if (stdin.isTTY) {
-    stdin.setRawMode?.(false);
-    stdin.pause?.();
+  try {
+    await stopped;
+  } finally {
+    clearInterval(clock);
+    cleanup();
   }
 }
 
