@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { chartColumns, chartsFrame, renderFrame, shrinkSteps } from "../src/charts.js";
+import { chartColumns, chartsFrame, renderFrame } from "../src/charts.js";
 
 const NOW = 1_800_000_000_000;
 const sample = { os: "Darwin", chip: "Apple M4 Pro", cores: 14, cpuPct: 62, cpuNowPct: 16, load5: 75, memPct: 33, memPressure: "normal", gpuPct: 20, diskPct: 49, diskFreeGB: 233, sims: 1, xcodebuild: 1 };
@@ -36,10 +36,6 @@ test("a failed attempt starts the dashed baseline at once", () => {
   const columns = chartColumns(points, "cpu", opts);
   assert.equal(columns.at(-2).kind, "gap");
   assert.equal(columns.at(-1).kind, "gap");
-});
-
-test("rows are lost GPU, memory, CPU, round and round", () => {
-  assert.deepEqual(shrinkSteps([3, 3, 3, 1]), [[3, 3, 3, 1], [3, 3, 2, 1], [3, 2, 2, 1], [2, 2, 2, 1], [2, 2, 1, 1], [2, 1, 1, 1], [1, 1, 1, 1]]);
 });
 
 test("charts are the default frame, in the approved shape, at 1h", () => {
@@ -96,39 +92,57 @@ test("detail text wraps and is never cut off, at every width and in both views",
   assert.match(flat, /a very long reason that certainly cannot fit in one short line of a box/);
 });
 
-test("a host loses chart rows to fit the pane, then falls back to cards", () => {
-  const rowsOf = (rows) => renderFrame([live], { columns: 50, rows, now: NOW }).text;
-  assert.equal(rowsOf(26).includes("peak"), true);
-  const shrunk = rowsOf(19);
-  assert.equal(shrunk.includes("peak"), false);
-  assert.equal(shrunk.split("\n").length <= 19, true);
-  const least = rowsOf(15).split("\n");
-  assert.equal(least.length, 15);
-  assert.equal(least[0], "● build-box · M4 Pro · 14c");
-  assert.match(least.at(-1), /^load 5\.4x/);
-  assert.equal(chartsFrame([live], { columns: 50, rows: 14, now: NOW }), null);
-  assert.match(rowsOf(14), /live/);
+test("a chart box keeps its rows however short the pane is, and the body scrolls", () => {
+  const flatten = (frame) => frame.body.map((line) => line.map((seg) => seg.text).join(""));
+  const boxRows = (body, label) => {
+    const at = body.findIndex((l) => l.startsWith(`╭─ ${label} `));
+    assert.notEqual(at, -1, `no ${label} box`);
+    let end = at + 1;
+    while (end < body.length && body[end].startsWith("│")) end++;
+    return end - at - 1;
+  };
+  const body = flatten(chartsFrame([live], { columns: 50, now: NOW }));
+  assert.equal(boxRows(body, "cpu"), 3);
+  assert.equal(boxRows(body, "memory"), 3);
+  assert.equal(boxRows(body, "gpu"), 3);
+  assert.equal(boxRows(body, "disk"), 1, "the disk box stays one row when boxes stack");
+  assert.equal(body.filter((l) => l.startsWith("╰─ 1h ")).length, 4, "every box keeps its window label");
+
+  const frame = (rows, scroll = 0) => renderFrame([live], { columns: 50, rows, now: NOW, scroll });
+  for (const rows of [8, 12, 19, 26, 40]) {
+    const lines = frame(rows).text.split("\n");
+    assert.equal(lines.length <= rows, true, `rows ${rows}`);
+    assert.match(lines.find((l) => l.startsWith("╭─ cpu")), /─ cpu ─+ 62% ─╮/, `the first box keeps its title at rows ${rows}`);
+  }
+  assert.equal(frame(15).maxScroll > 0, true, "a pane shorter than the body scrolls");
+  assert.equal(frame(40).maxScroll, 0, "a roomy pane does not");
+  assert.match(frame(15, 9999).text, /^load 5\.4x/m, "scrolling reaches the details rather than losing them");
+  assert.match(frame(15, 9999).text, /╰─ 1h ─+ peak \d+% ─╯/, "the bottom of a scrolled pane still lands on a box edge");
+  // Only a pane too narrow for a box falls back to the cards view.
   assert.equal(chartsFrame([live], { columns: 29, now: NOW }), null);
+  assert.notEqual(chartsFrame([live], { columns: 30, now: NOW }), null);
 });
 
 test("a short pane scrolls instead of hiding hosts, and the header stays pinned", () => {
   const second = { ...live, label: "mini" };
   const top = renderFrame([live, second], { columns: 60, rows: 20, now: NOW });
   assert.equal(top.maxScroll > 0, true);
-  assert.match(top.text, /↓\d+/);
   assert.equal(top.text.includes("mini"), false);
-  assert.match(top.text.split("\n")[0], /^ {2}resource-monitor-axi · \d\d:\d\d · 2 live · 0 stale · ↓\d+$/, "the counts stay whole beside the scroll marks");
+  assert.match(top.text.split("\n")[0], /^ {2}resource-monitor-axi · \d\d:\d\d · 2 live · 0 stale$/, "the header keeps its counts and no scroll count");
   const bottom = renderFrame([live, second], { columns: 60, rows: 20, now: NOW, scroll: 9999 });
   assert.equal(bottom.scroll, top.maxScroll);
-  assert.match(bottom.text, /mini/);
-  assert.match(bottom.text.split("\n")[0], /resource-monitor-axi/);
-  assert.match(bottom.text, /↑\d+/);
+  assert.equal(bottom.text.split("\n")[0], top.text.split("\n")[0], "the header does not change as the body scrolls");
+  // The second host is a scroll away rather than hidden: its section is in the body.
+  const body = chartsFrame([live, second], { columns: 60, rows: 20, now: NOW }).body.map((line) => line.map((seg) => seg.text).join(""));
+  const at = body.findIndex((line) => line.includes("mini"));
+  assert.equal(at > 0, true);
+  assert.match(renderFrame([live, second], { columns: 60, rows: 20, now: NOW, scroll: at }).text, /mini/);
   const tiny = renderFrame([live, second], { columns: 50, rows: 6, now: NOW, scroll: 9999 });
   assert.equal(tiny.text.split("\n").length, 6);
   assert.equal(tiny.maxScroll > 0, true);
   const crowded = renderFrame([live, second], { columns: 34, rows: 25, now: NOW });
   assert.match(crowded.text.split("\n")[0], /^ {2}resource-monitor-axi · \d\d:\d\d$/);
-  assert.match(crowded.text.split("\n").find((l) => l.includes("↓")), /^ {2}2 live · 0 stale · ↓\d+$/);
+  assert.match(crowded.text.split("\n")[1], /^ {2}2 live · 0 stale$/);
 });
 
 test("header wraps instead of dropping parts at 37, 49, and 80 columns, including scrolled panes", () => {
@@ -140,21 +154,22 @@ test("header wraps instead of dropping parts at 37, 49, and 80 columns, includin
   assert.match(lines80[0], /^ {2}resource-monitor-axi · \d\d:\d\d · 2 live · 0 stale$/);
   assert.equal(lines80[1], "");
 
-  // 80 columns scrolled: marks on single line
+  // 80 columns with a body that scrolls: the same one line and blank, no scroll count
   const f80s = renderFrame([live, second], { columns: 80, rows: 15, now: NOW });
-  assert.match(f80s.text.split("\n")[0], /^ {2}resource-monitor-axi · \d\d:\d\d · 2 live · 0 stale · ↓\d+$/);
+  assert.equal(f80s.maxScroll > 0, true);
+  assert.deepEqual(f80s.text.split("\n").slice(0, 2), lines80.slice(0, 2));
 
-  // 49 columns: fits on single line without marks
+  // 49 columns: fits on single line
   const f49 = renderFrame([live], { columns: 49, rows: 31, now: NOW });
   const lines49 = f49.text.split("\n");
   assert.match(lines49[0], /^ {2}resource-monitor-axi · \d\d:\d\d · 1 live · 0 stale$/);
   assert.equal(lines49[1], "");
 
-  // 49 columns scrolled: wraps greedily with full header on line 0, marks on line 1
+  // 49 columns scrolled: still the full header on one line
   const f49s = renderFrame([live, second], { columns: 49, rows: 20, now: NOW });
   const lines49s = f49s.text.split("\n");
-  assert.match(lines49s[0], /^ {2}resource-monitor-axi · \d\d:\d\d · 2 live · 0 stale$/);
-  assert.match(lines49s[1], /^ {2}↓\d+$/);
+  assert.equal(lines49s[0], "  resource-monitor-axi · 02:00 · 2 live · 0 stale");
+  assert.equal(lines49s[1], "");
 
   // 37 columns: wraps greedily onto 2 lines, preserving blank line when roomy
   const f37 = renderFrame([live], { columns: 37, rows: 31, now: NOW });
@@ -163,18 +178,18 @@ test("header wraps instead of dropping parts at 37, 49, and 80 columns, includin
   assert.match(lines37[1], /^ {2}1 live · 0 stale$/);
   assert.equal(lines37[2], "");
 
-  // 37 columns scrolled: wraps onto 2 lines, marks on second line, pinned header & body reaches last line
+  // 37 columns scrolled: the same two lines, pinned, and the body reaches the last line
   const f37s = renderFrame([live, second], { columns: 37, rows: 25, now: NOW });
   const lines37s = f37s.text.split("\n");
   assert.match(lines37s[0], /^ {2}resource-monitor-axi · \d\d:\d\d$/);
-  assert.match(lines37s[1], /^ {2}2 live · 0 stale · ↓\d+$/);
+  assert.match(lines37s[1], /^ {2}2 live · 0 stale$/);
   assert.equal(lines37s.length, 25);
+  assert.equal(f37s.maxScroll > 0, true);
 
-  // Scrolled to bottom reaches the last body line in height layout
+  // Scrolled to bottom: unchanged header, and the last line is body
   const f37b = renderFrame([live, second], { columns: 37, rows: 25, now: NOW, scroll: 9999 });
   const lines37b = f37b.text.split("\n");
-  assert.match(lines37b[0], /^ {2}resource-monitor-axi · \d\d:\d\d$/);
-  assert.match(lines37b[1], /^ {2}2 live · 0 stale · ↑\d+$/);
+  assert.deepEqual(lines37b.slice(0, 3), lines37s.slice(0, 3));
   assert.equal(lines37b.length, 25);
   assert.equal(f37b.scroll, f37s.maxScroll);
 
@@ -218,7 +233,7 @@ test("a restarted panel shows history before the first reading and names the tim
 });
 
 test("a metric the host cannot read has no box", () => {
-  const { gpuPct, ...noGpu } = sample;
+  const { gpuPct: _gpuPct, ...noGpu } = sample;
   const out = renderFrame([{ label: "linux", sample: noGpu, points: [{ t: NOW, cpu: 4 }] }], { columns: 50, now: NOW }).text;
   assert.equal(out.includes("gpu"), false);
   assert.match(out, /disk/);
@@ -241,8 +256,24 @@ test("a key of every shortcut stays on the bottom rows, naming what w and i chan
   assert.match(cards, /r refresh/);
   assert.doesNotMatch(cards, /\bv /, "no toggle key when there is nothing to toggle to");
   assert.doesNotMatch(cards, /w window/);
-  assert.equal(renderFrame([live], { columns: 50, rows: 9, now: NOW, keys: true }).text.includes("q quit"), false, "a tiny pane keeps its room for data");
+  const short = renderFrame([live], { columns: 50, rows: 9, now: NOW, keys: true });
+  assert.equal(short.text.includes("q quit"), false, "a short pane starts on the data, not the key");
+  assert.equal(short.maxScroll > 0, true, "and the key is a scroll away");
+  assert.match(renderFrame([live], { columns: 50, rows: 9, now: NOW, keys: true, scroll: 9999 }).text, /q quit/);
   assert.equal(renderFrame([live], { columns: 50, now: NOW }).text.includes("q quit"), false, "no key without a live panel");
+});
+
+test("the key of shortcuts never takes rows from the panels", () => {
+  const rows = 8;
+  const withKey = renderFrame([live], { view: "cards", columns: 49, rows, now: NOW, keys: true });
+  const withoutKey = renderFrame([live], { view: "cards", columns: 49, rows, now: NOW });
+  const panelTop = (frame) => frame.text.split("\n").filter((l) => /^[╭│]/.test(l));
+  assert.deepEqual(panelTop(withKey), panelTop(withoutKey), "the same panels show whether or not the key is on");
+  assert.equal(withKey.text.includes("q quit"), false, "the key is below the fold, not squeezing the card");
+  assert.equal(withKey.maxScroll > withoutKey.maxScroll, true, "it only adds scroll");
+  const bottom = renderFrame([live], { view: "cards", columns: 49, rows, now: NOW, keys: true, scroll: 9999 });
+  assert.match(bottom.text, /q quit/);
+  assert.equal(bottom.scroll, withKey.maxScroll);
 });
 
 test("the top line re-renders when the minute changes, even between samples and at long interval", () => {

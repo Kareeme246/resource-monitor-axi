@@ -14,6 +14,8 @@ import { THRESHOLDS, loadPerCore, usageLevel, verdict } from "./verdict.js";
 const TWO_ACROSS = 66;
 const FOUR_ACROSS = 99;
 const CHART_ROWS = 3;
+/** The least a chart box shrinks to before the view scrolls: 4 lines, 20% under the roomy box. */
+const MIN_CHART_ROWS = 2;
 const BLOCKS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 /** A quiet stretch shorter than this is the wait for the next sample, not a gap. */
 const MIN_GAP_MS = 30_000;
@@ -283,63 +285,46 @@ function sideBySide(boxes) {
   return out;
 }
 
-/** Take rows away one at a time, last group first, each pass, down to one row each. */
-export function shrinkSteps(start) {
-  const steps = [start];
-  let now = start;
-  while (now.some((h) => h > 1)) {
-    for (let i = now.length - 1; i >= 0; i--) {
-      if (now[i] > 1) {
-        now = now.with(i, now[i] - 1);
-        steps.push(now);
-      }
-    }
-  }
-  return steps;
-}
-
 const metricsOf = (state) =>
   METRICS.filter((m) => state.sample?.[m.field] !== undefined || (state.points ?? []).some((p) => p[m.key] !== undefined));
 
-function chartHeader(states, { columns, now, roomy, allStates }) {
+function chartHeader(states, { columns, now, allStates }) {
   const monitored = allStates ?? states;
   const live = monitored.filter((st) => st.sample && !st.error).length;
   const stale = monitored.filter((st) => st.error || !st.sample).length;
   const time = formatQueryTime(now);
   const lines = formatHeaderLines({ time, live, stale, columns });
   const toLine = (text) => [{ text: `  ${text}`, style: "dim" }];
-  const head = lines.map(toLine);
-  return roomy ? [...head, []] : head;
+  return [...lines.map(toLine), []];
 }
 
 /**
  * The chart view as a pinned header and a scrollable body. A host is a section:
- * an unboxed header, its charts, then its details. Each host shrinks to
- * fit the pane on its own and hosts then stack, so several hosts scroll instead
- * of hiding one another. Returns null when one host cannot fit at all, or the
- * pane is too narrow for a box, which is when the card view's shapes take over.
+ * an unboxed header, its charts, then its details. A chart box gives up rows
+ * only down to its least height, and hosts stack and scroll past it, so a box is
+ * never squashed below that and a host is never hidden. Returns null only when
+ * the pane is too narrow for a box, which is when the card view's shapes take over.
  */
 export function chartsFrame(states, { columns = 80, rows, intervalS = 15, windowS = 3600, now = Date.now(), allStates } = {}) {
   if (columns < MIN_CARD_WIDTH) return null;
-  const single = states.length === 1;
   const perRow = columns < TWO_ACROSS ? 1 : columns < FOUR_ACROSS ? 2 : 4;
   const w = perRow === 1 ? Math.min(CARD_WIDTH, columns) : Math.floor((columns - (perRow - 1)) / perRow);
   const label = WINDOWS.find((x) => x.seconds === windowS)?.label ?? `${windowS}s`;
   const metrics = METRICS;
 
   // Heights are per row of boxes: the disk box stays one row when boxes stack.
-  const start = perRow === 1 ? [CHART_ROWS, CHART_ROWS, CHART_ROWS, 1] : perRow === 2 ? [CHART_ROWS, CHART_ROWS] : [CHART_ROWS];
-  const steps = shrinkSteps(start);
+  const heightsFor = (chartRows) =>
+    perRow === 1 ? [chartRows, chartRows, chartRows, 1] : perRow === 2 ? [chartRows, chartRows] : [chartRows];
   const groupOf = (index) => (perRow === 1 ? index : perRow === 2 ? Math.floor(index / 2) : 0);
 
-  const buildHost = (state, heights, { labels, gap }) => {
+  const buildHost = (state, heights) => {
     const present = metricsOf(state);
     const dim = Boolean(state.error) || !state.sample;
     const textWidth = perRow === 1 ? w : columns;
     const out = [hostHeader(state, textWidth, now)];
-    const opts = { now, windowS, label, intervalS, labels, dim };
+    const opts = { now, windowS, label, intervalS, labels: true, dim };
     for (let i = 0; i < present.length; i += perRow) {
-      if (i > 0 && gap) out.push([]);
+      if (i > 0) out.push([]);
       const group = present.slice(i, i + perRow);
       const h = heights[groupOf(metrics.indexOf(group[0]))];
       out.push(...sideBySide(group.map((m) => chartBox(state, m, w, h, opts))));
@@ -348,31 +333,21 @@ export function chartsFrame(states, { columns = 80, rows, intervalS = 15, window
     return out;
   };
 
-  const header = (roomy) => chartHeader(states, { columns, now, roomy, allStates });
-  const stack = (shape, gap) => {
-    const body = [];
-    states.forEach((state, i) => {
-      if (i && gap) body.push([], []);
-      body.push(...buildHost(state, shape.heights, shape));
-    });
-    return body;
-  };
+  const header = chartHeader(states, { columns, now, allStates });
+  // The roomiest boxes the pane holds for one host, else its least boxes, and
+  // only below those does the body scroll.
+  const roomy = heightsFor(CHART_ROWS);
+  const least = heightsFor(MIN_CHART_ROWS);
+  const fits = (heights) =>
+    rows === undefined || header.length + Math.max(0, ...states.map((state) => buildHost(state, heights).length)) <= rows;
+  const heights = fits(roomy) ? roomy : least;
 
-  const shapes = [{ heights: start, labels: true, roomy: true, gap: true }];
-  for (const heights of steps) shapes.push({ heights, labels: false, roomy: false, gap: false });
-  // At the very last, one host gives up the panel header too.
-  if (single) shapes.push({ heights: steps.at(-1), labels: false, roomy: false, gap: false, bare: true });
-
-  if (rows !== undefined) {
-    for (const shape of shapes) {
-      const head = shape.bare ? [] : header(shape.roomy);
-      const tallest = Math.max(0, ...states.map((st) => buildHost(st, shape.heights, shape).length));
-      if (head.length + tallest <= rows) return { header: head, body: stack(shape, shape.gap) };
-    }
-    if (single) return null;
-  }
-  const shape = rows === undefined ? shapes[0] : shapes.findLast((x) => !x.bare);
-  return { header: shape.bare ? [] : header(shape.roomy), body: stack(shape, shape.gap) };
+  const body = [];
+  states.forEach((state, i) => {
+    if (i) body.push([], []);
+    body.push(...buildHost(state, heights));
+  });
+  return { header, body };
 }
 
 /** The next stop on a cycle: the first value past `current`, or back to the start. */
@@ -398,20 +373,17 @@ function keyFooter(view, { columns, intervalS, windowS, toggle }) {
   return flow(units, Math.max(1, columns - 2)).map((line) => [{ text: "  " }, ...line]);
 }
 
-/** Below this many rows of body, the key would crowd out what it describes. */
-const MIN_BODY_FOR_KEY = 8;
-
 /**
- * One frame of either view. A chart view that cannot fit falls back to cards.
- * `keys` adds the pinned key of shortcuts, for a panel that is taking input, and
+ * One frame of either view. A chart view that cannot fit scrolls its body, or
+ * falls back to cards when the pane is too narrow for a chart box. `keys` adds
+ * the key of shortcuts under the panels, for a panel that is taking input, and
  * `toggle` names what `v` would switch to, when there is anything to switch to.
+ * The key takes no rows of its own: a short pane scrolls down to it.
  * @returns {{text: string, maxScroll: number, scroll: number}}
  */
 export function renderFrame(states, { view = "charts", columns = 80, rows, intervalS = 15, windowS = 3600, now = Date.now(), depth = "none", theme = "dark", scroll = 0, keys = false, toggle, allStates } = {}) {
-  let footer = keys ? keyFooter(view, { columns, intervalS, windowS, toggle }) : [];
-  if (rows !== undefined && rows - footer.length < MIN_BODY_FOR_KEY) footer = [];
-  const room = rows === undefined ? undefined : rows - footer.length;
-  const charts = view === "charts" ? chartsFrame(states, { columns, rows: room, intervalS, windowS, now, allStates }) : null;
-  const frame = charts ?? cardsFrame(states, { columns, rows: room, intervalS, now, allStates });
-  return composeFrame(frame, { columns, rows: room, scroll, depth, theme, footer });
+  const footer = keys ? keyFooter(view, { columns, intervalS, windowS, toggle }) : [];
+  const charts = view === "charts" ? chartsFrame(states, { columns, rows, intervalS, windowS, now, allStates }) : null;
+  const frame = charts ?? cardsFrame(states, { columns, rows, intervalS, now, allStates });
+  return composeFrame(frame, { rows, scroll, depth, theme, footer });
 }

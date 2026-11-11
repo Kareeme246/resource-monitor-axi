@@ -1,8 +1,9 @@
 /**
  * Plain-text card panel in quota-axi's visual language: rounded boxes, thin
  * `━` bars on a `─` track, muted labels, a dim header. Cards are text, so the
- * layout simply reflows: as many columns as the width allows, and tighter card
- * shapes when the height runs short.
+ * layout simply reflows: as many columns as the width allows, and the blank
+ * padding rows go before the metrics when the height runs short. A card never
+ * shrinks past its metrics: a pane too short to hold them scrolls instead.
  */
 import { THRESHOLDS, loadPerCore, usageLevel, verdict } from "./verdict.js";
 
@@ -507,7 +508,9 @@ export function hostLevels(states) {
 
 /**
  * The card view as a pinned header and a scrollable body. Picks the roomiest
- * card shape whose total height fits.
+ * card shape whose total height fits, down to the tight shape, which is a
+ * card's minimum height: below that the body scrolls rather than squash it.
+ * One-line cards are only for a pane too narrow for a box.
  */
 export function cardsFrame(states, { columns = 80, rows, intervalS = 15, now = Date.now(), allStates } = {}) {
   const w = Math.max(MIN_CARD_WIDTH, Math.min(CARD_WIDTH, columns));
@@ -523,7 +526,7 @@ export function cardsFrame(states, { columns = 80, rows, intervalS = 15, now = D
   const lineRows = () => states.flatMap((st) => buildCard(st, Math.max(1, columns - 2), "line", now).map((line) => [{ text: "  " }, ...line]));
 
   let body;
-  const shapes = columns < MIN_CARD_WIDTH ? ["line"] : ["full", "tight", "line"];
+  const shapes = columns < MIN_CARD_WIDTH ? ["line"] : ["full", "tight"];
   for (const shape of shapes) {
     const candidate = shape === "line" ? lineRows() : build(shape);
     body = candidate;
@@ -534,64 +537,25 @@ export function cardsFrame(states, { columns = 80, rows, intervalS = 15, now = D
 
 /**
  * Fit a pinned header and a body to the pane. A body taller than the pane
- * scrolls, and the last header line with text says how much is out of sight.
+ * scrolls; the header keeps its counts and says nothing about how far. The
+ * footer rides at the foot of the body, so it only takes rows the panels leave
+ * over and is scrolled to like the rest of them when they need them.
  * @returns {{text: string, maxScroll: number, scroll: number}}
  */
-export function composeFrame({ header, body }, { columns = 80, rows, scroll = 0, depth = "none", theme = "dark", footer = [] } = {}) {
-  let view = rows === undefined ? body.length : Math.max(1, rows - header.length);
-  let maxScroll = Math.max(0, body.length - view);
-  let top = Math.min(Math.max(0, scroll), maxScroll);
-  let head = header;
-  if (maxScroll > 0) {
-    const marks = [top > 0 ? `↑${top}` : "", top < maxScroll ? `↓${maxScroll - top}` : ""].filter(Boolean).join(" ");
-    const suffix = ` · ${marks}`;
-    const at = header.findLastIndex((line) => line.length > 0);
-    if (at >= 0) {
-      const text = header[at].map((seg) => seg.text).join("");
-      if (width(`${text}${suffix}`) <= columns) {
-        head = header.with(at, [{ text: `${text}${suffix}`, style: "dim" }]);
-      } else {
-        const room = Math.max(1, columns - 2);
-        const raw = text.replace(/^ {2}/, "");
-        const parts = [...raw.split(" · "), marks];
-        const wrapped = wrapParts(parts, room);
-        const newLines = wrapped.map((l) => [{ text: `  ${l}`, style: "dim" }]);
-        head = [...header.slice(0, at), ...newLines, ...header.slice(at + 1)];
-      }
-    }
-    if (head.length !== header.length) {
-      view = rows === undefined ? body.length : Math.max(1, rows - head.length);
-      maxScroll = Math.max(0, body.length - view);
-      top = Math.min(Math.max(0, scroll), maxScroll);
-      const newMarks = [top > 0 ? `↑${top}` : "", top < maxScroll ? `↓${maxScroll - top}` : ""].filter(Boolean).join(" ");
-      if (newMarks !== marks) {
-        const lastAt = head.findLastIndex((line) => line.length > 0);
-        if (lastAt >= 0) {
-          const lastText = head[lastAt].map((seg) => seg.text).join("");
-          if (lastText.endsWith(` · ${marks}`)) {
-            const cutLen = width(` · ${marks}`);
-            const base = lastText.slice(0, -cutLen);
-            const updatedText = newMarks ? `${base} · ${newMarks}` : base;
-            head = head.with(lastAt, [{ text: updatedText, style: "dim" }]);
-          } else if (lastText.endsWith(marks)) {
-            const cutLen = width(marks);
-            const base = lastText.slice(0, -cutLen);
-            const updatedText = newMarks ? `${base}${newMarks}` : base;
-            head = head.with(lastAt, [{ text: updatedText, style: "dim" }]);
-          }
-        }
-      }
-    }
-  }
-  const lines = [...head, ...body.slice(top, top + view)];
-  const limited = rows === undefined ? lines : lines.slice(0, rows);
-  // The key stays on the pane's very last rows, however little the body fills.
-  const padding = rows === undefined || !footer.length ? [] : Array.from({ length: Math.max(0, rows - limited.length) }, () => []);
-  const all = [...limited, ...padding, ...footer];
+export function composeFrame({ header, body }, { rows, scroll = 0, depth = "none", theme = "dark", footer = [] } = {}) {
+  const content = [...body, ...footer];
+  const view = rows === undefined ? content.length : Math.max(1, rows - header.length);
+  const maxScroll = Math.max(0, content.length - view);
+  const top = Math.min(Math.max(0, scroll), maxScroll);
+  // With rows to spare the key still drops to the pane's very last rows.
+  const pad = rows === undefined || maxScroll > 0 || !footer.length ? 0 : Math.max(0, rows - header.length - content.length);
+  const laid = pad ? [...body, ...Array.from({ length: pad }, () => []), ...footer] : content;
+  const lines = [...header, ...laid.slice(top, top + view)];
+  const all = rows === undefined ? lines : lines.slice(0, rows);
   return { text: all.map((line) => paint(trimRight(line), { depth, theme })).join("\n"), maxScroll, scroll: top };
 }
 
 /** Render the card panel for `states`, sized to `columns` x `rows` (rows optional). */
 export function renderPanel(states, { columns = 80, rows, intervalS = 15, now = Date.now(), depth = "none", theme = "dark", scroll = 0, allStates } = {}) {
-  return composeFrame(cardsFrame(states, { columns, rows, intervalS, now, allStates }), { columns, rows, scroll, depth, theme }).text;
+  return composeFrame(cardsFrame(states, { columns, rows, intervalS, now, allStates }), { rows, scroll, depth, theme }).text;
 }

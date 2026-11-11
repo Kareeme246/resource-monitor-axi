@@ -542,9 +542,14 @@ esac
     clean = clean.replace('\\r', '')
     lines = [line for line in clean.split('\\n')]
 
-    # Pinned header on lines 0 and 1 with greedy wrap and scroll mark
-    assert re.match(r'^  resource-monitor-axi · \\d\\d:\\d\\d · \\d live$', lines[0]), f"Expected header line 0 to have name, time and live count, got {lines[0]!r}"
-    assert '↑2' in lines[1], f"Expected scroll mark ↑2 from 2 wheel down events, got {lines[1]!r}"
+    # Pinned header, unchanged by scrolling: name, time and counts, then a blank line
+    assert re.match(r'^  resource-monitor-axi · \\d\\d:\\d\\d · 2 live$', lines[0]), f"Expected header line 0 to have name, time and live count, got {lines[0]!r}"
+    assert re.match(r'^  0 stale$', lines[1]), f"Expected header line 1 to have the counts, got {lines[1]!r}"
+    assert lines[2] == '', f"Expected a blank line under the header, got {lines[2]!r}"
+    # Two wheel downs move the body two rows: the first host's unboxed header is
+    # gone and the view starts inside its first chart box, not on its title.
+    assert '● h1' not in clean, f"Expected the body to scroll past the first host header, got {clean[:200]!r}"
+    assert lines[3].startswith('│'), f"Expected a chart row under the header, got {lines[3]!r}"
     print("PTY_WHEEL_SCROLL_OK")
 finally:
     shutil.rmtree(d, ignore_errors=True)

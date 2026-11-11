@@ -56,8 +56,10 @@ Flags for `--tui`: `--view charts|cards`, `--interval <seconds>`, `--theme light
 `TERM=dumb` and piped output turn colour off, leaving the plain glyph skeleton.
 `RESOURCE_MONITOR_AXI_SSH_CONFIG=<file>` points ssh at another config file.
 
-The panel shows this key along its bottom, including what `w` and `i` change to next.
-They last until you quit; to change what it opens with, use the config.
+The panel shows this key under the panels, including what `w` and `i` change to next.
+It takes no rows of its own: a pane too short for the key scrolls down to it rather
+than shrinking the panels. They last until you quit; to change what it opens with,
+use the config.
 
 | Key | Does |
 | --- | --- |

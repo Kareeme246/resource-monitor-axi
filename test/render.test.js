@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { formatHeaderLine, formatHeaderLines, formatQueryTime, renderPanel } from "../src/render.js";
+import { cardsFrame, composeFrame, formatHeaderLine, formatHeaderLines, formatQueryTime, renderPanel } from "../src/render.js";
 import { snapshotData } from "../src/cli.js";
 
 const sample = { os: "Darwin", chip: "Apple M4 Pro", cores: 14, cpuPct: 62, load1: 4, load5: 4, memPct: 40, memPressure: "normal", gpuPct: 20, diskPct: 44, diskFreeGB: 259, sims: 1, xcodebuild: 1 };
@@ -48,7 +48,7 @@ test("two configured hosts reflow cleanly when narrow and wide", () => {
   }
 });
 
-test("short terminals fall back to tighter shapes that still fit", () => {
+test("short terminals drop the card padding before the metrics", () => {
   const states = [live, live, live];
   const full = renderPanel(states, { columns: 49, now: 2000 }).split("\n").length;
   const tight = renderPanel(states, { columns: 49, rows: full - 1, now: 2000 }).split("\n").length;
@@ -56,6 +56,24 @@ test("short terminals fall back to tighter shapes that still fit", () => {
   assert.equal(tight < full, true);
   assert.equal(line.length <= 8, true);
   assert.match(line.join("\n"), /build-box/);
+});
+
+test("a card keeps every metric row when the pane is short, and the body scrolls", () => {
+  const textOf = (frame) => frame.body.map((line) => line.map((seg) => seg.text).join(""));
+  const states = [live, live, live];
+  for (const rows of [6, 10, 16]) {
+    const body = textOf(cardsFrame(states, { columns: 49, rows, now: 2000 }));
+    assert.equal(body.filter((l) => l.startsWith("╭")).length, 3, `rows ${rows}: every panel keeps its box`);
+    assert.equal(body.filter((l) => /^│   cpu /.test(l)).length, 3, `rows ${rows}: every metric row stays`);
+    assert.equal(body.filter((l) => l.includes("● busy")).length, 3, `rows ${rows}: the verdict stays`);
+    assert.equal(body.filter((l) => /^╰─+╯$/.test(l)).length, 3, `rows ${rows}: the bottom edge stays`);
+  }
+  // A card's floor is its tight shape: nothing is dropped, the padding goes first.
+  const short = textOf(cardsFrame([live], { columns: 49, rows: 4, now: 2000 }));
+  assert.equal(short[1].startsWith("│   cpu"), true, "no blank padding row above the metrics");
+  const frame = composeFrame(cardsFrame([live], { columns: 49, rows: 4, now: 2000 }), { columns: 49, rows: 4, footer: [[{ text: "  q quit" }]] });
+  assert.equal(frame.maxScroll > 0, true, "a card taller than the pane scrolls");
+  assert.equal(frame.text.split("\n").length, 4);
 });
 
 test("an unreachable host is a clearly stale card that keeps its last reading", () => {
