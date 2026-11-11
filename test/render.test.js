@@ -70,10 +70,29 @@ test("a card keeps every metric row when the pane is short, and the body scrolls
   }
   // A card's floor is its tight shape: nothing is dropped, the padding goes first.
   const short = textOf(cardsFrame([live], { columns: 49, rows: 4, now: 2000 }));
-  assert.equal(short[1].startsWith("│   cpu"), true, "no blank padding row above the metrics");
+  assert.match(short[1], /^│ {3}● busy {2}cpu 62%/, "the status line sits under the title");
+  assert.equal(short[2].startsWith("│   cpu"), true, "no blank padding row between the status line and the metrics");
   const frame = composeFrame(cardsFrame([live], { columns: 49, rows: 4, now: 2000 }), { columns: 49, rows: 4, footer: [[{ text: "  q quit" }]] });
   assert.equal(frame.maxScroll > 0, true, "a card taller than the pane scrolls");
   assert.equal(frame.text.split("\n").length, 4);
+});
+
+test("a card's status line sits under its title, above the metric rows", () => {
+  const lines = renderPanel([live], { columns: 60, now: 2000 }).split("\n");
+  const at = (re) => lines.findIndex((l) => re.test(l));
+  const title = at(/^╭─ ● build-box /);
+  const verdict = at(/^│ {3}● busy {2}cpu 62%/);
+  const cpu = at(/^│ {3}cpu /);
+  assert.notEqual(title, -1);
+  assert.equal(title < verdict, true, "the status line comes right after the title");
+  assert.equal(verdict < cpu, true, "and before the first metric row");
+  const metrics = lines.filter((l) => /^│ {3}(cpu|memory|gpu|disk|load 5m|sims|builds) /.test(l));
+  assert.equal(metrics.length, 7, "every metric row stays, all below the status line");
+  // A card whose host is away puts its failure in the same place.
+  const staleLines = renderPanel([stale], { columns: 60, now: 31000 }).split("\n");
+  const failure = staleLines.findIndex((l) => l.includes("connection timed out"));
+  const staleCpu = staleLines.findIndex((l) => /^│ {3}cpu /.test(l));
+  assert.equal(failure > 0 && failure < staleCpu, true, "the failure sits above the dimmed metrics");
 });
 
 test("an unreachable host is a clearly stale card that keeps its last reading", () => {

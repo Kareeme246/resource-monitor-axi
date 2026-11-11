@@ -320,6 +320,8 @@ export function ago(ms) {
 /**
  * A host card in one of three shapes: "full" (blank padding rows like
  * quota-axi), "tight" (no padding) and "line" (one row, for very short panes).
+ * The status line - verdict, reasons, and the short stats - sits under the
+ * title and above the metric rows, in every shape that has a title.
  * `state` is `{label, sample?, error?, sampledAt?}`; a host with an `error` is
  * stale: its last reading, if any, is drawn dim under the failure.
  */
@@ -358,20 +360,23 @@ export function buildCard(state, w, shape, now) {
   const row = (content) => interior(w, content, border);
   if (pad) lines.push(row([]));
 
+  // The status line sits right under the title, above the metric rows.
   if (stale) {
-    if (s) lines.push(...metricRows(w, sampleWithCeiling, true, t).map(row));
     const msg = state.error ?? "waiting for first reading";
-    if (s) lines.push(row([]));
     const room = Math.max(1, w - 6);
     const pushWrapped = (units, indent) =>
       lines.push(...flow(units, room, { indent }).map((line) => row([{ text: "   " }, ...line])));
     pushWrapped(words(`● ${msg}`, state.error ? "crit" : "dim"), 2);
     const staleMsg = s ? `last reading ${ago(now - state.sampledAt)} ago, excluded from totals` : "no reading yet";
     pushWrapped(words(staleMsg, "dimmer"), 0);
+    if (s) {
+      lines.push(row([]));
+      lines.push(...metricRows(w, sampleWithCeiling, true, t).map(row));
+    }
   } else {
-    lines.push(...metricRows(w, sampleWithCeiling, false, t).map(row));
-    if (pad) lines.push(row([]));
     lines.push(...verdictRows(w, v, false).map(row));
+    if (pad) lines.push(row([]));
+    lines.push(...metricRows(w, sampleWithCeiling, false, t).map(row));
   }
   if (pad) lines.push(row([]));
   lines.push(bottomLine(w, border));

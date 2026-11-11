@@ -547,9 +547,11 @@ esac
     assert re.match(r'^  0 stale$', lines[1]), f"Expected header line 1 to have the counts, got {lines[1]!r}"
     assert lines[2] == '', f"Expected a blank line under the header, got {lines[2]!r}"
     # Two wheel downs move the body two rows: the first host's unboxed header is
-    # gone and the view starts inside its first chart box, not on its title.
+    # gone, and the view starts on the second line of its status line, with the
+    # chart box right below it.
     assert '● h1' not in clean, f"Expected the body to scroll past the first host header, got {clean[:200]!r}"
-    assert lines[3].startswith('│'), f"Expected a chart row under the header, got {lines[3]!r}"
+    assert re.match(r'^load [0-9.]+x  sims 0/2  xcodebuild idle$', lines[3]), f"Expected the rest of the status line under the header, got {lines[3]!r}"
+    assert re.match(r'^╭─ cpu ', lines[4]), f"Expected the first chart box after the status line, got {lines[4]!r}"
     print("PTY_WHEEL_SCROLL_OK")
 finally:
     shutil.rmtree(d, ignore_errors=True)

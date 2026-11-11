@@ -247,8 +247,9 @@ function hostHeader(state, w, now) {
 const spaced = (units) => units.map((u, i) => (i ? u : { ...u, gap: 2 }));
 
 /**
- * The details at the foot of a host's section, plain and wrapped, never cut off:
- * the verdict and its reasons, then the short stats, on one row if they fit.
+ * The status line of a host's section, plain and wrapped, never cut off: the
+ * verdict and its reasons, then the short stats, on one row if they fit. It sits
+ * under the host title, above the charts.
  */
 function hostDetails(state, w, now) {
   const f = hostFacts(state, now);
@@ -300,7 +301,7 @@ function chartHeader(states, { columns, now, allStates }) {
 
 /**
  * The chart view as a pinned header and a scrollable body. A host is a section:
- * an unboxed header, its charts, then its details. A chart box gives up rows
+ * an unboxed header, its status line, then its charts. A chart box gives up rows
  * only down to its least height, and hosts stack and scroll past it, so a box is
  * never squashed below that and a host is never hidden. Returns null only when
  * the pane is too narrow for a box, which is when the card view's shapes take over.
@@ -321,7 +322,8 @@ export function chartsFrame(states, { columns = 80, rows, intervalS = 15, window
     const present = metricsOf(state);
     const dim = Boolean(state.error) || !state.sample;
     const textWidth = perRow === 1 ? w : columns;
-    const out = [hostHeader(state, textWidth, now)];
+    // The status line sits right under the host title, before its charts.
+    const out = [hostHeader(state, textWidth, now), ...hostDetails(state, textWidth, now)];
     const opts = { now, windowS, label, intervalS, labels: true, dim };
     for (let i = 0; i < present.length; i += perRow) {
       if (i > 0) out.push([]);
@@ -329,7 +331,6 @@ export function chartsFrame(states, { columns = 80, rows, intervalS = 15, window
       const h = heights[groupOf(metrics.indexOf(group[0]))];
       out.push(...sideBySide(group.map((m) => chartBox(state, m, w, h, opts))));
     }
-    out.push(...hostDetails(state, textWidth, now));
     return out;
   };
 

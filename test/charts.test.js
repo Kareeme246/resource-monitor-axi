@@ -48,8 +48,10 @@ test("charts are the default frame, in the approved shape, at 1h", () => {
   assert.match(out, /load 5\.4x {2}sims 1\/2 {2}xcodebuild 1/);
   const lines = out.split("\n");
   assert.equal(lines[2], "● build-box · M4 Pro · 14c", "the host is an unboxed header");
-  assert.match(lines.at(-2), /^● busy {2}cpu 62%/, "details sit unboxed under the charts");
-  assert.match(lines.at(-1), /^load 5\.4x/);
+  assert.equal(lines[3], "● busy  cpu 62%", "the status line follows the header");
+  assert.equal(lines[4], "load 5.4x  sims 1/2  xcodebuild 1");
+  assert.match(lines[5], /^╭─ cpu /, "the charts come after the status line, not before it");
+  assert.match(lines.at(-1), /^╰─ 1h ─+ peak 49% ─╯$/, "the section ends on its last chart box");
   assert.equal(lines.some((l) => /^╭─ . build-box/.test(l)), false);
 });
 
@@ -116,7 +118,8 @@ test("a chart box keeps its rows however short the pane is, and the body scrolls
   }
   assert.equal(frame(15).maxScroll > 0, true, "a pane shorter than the body scrolls");
   assert.equal(frame(40).maxScroll, 0, "a roomy pane does not");
-  assert.match(frame(15, 9999).text, /^load 5\.4x/m, "scrolling reaches the details rather than losing them");
+  assert.match(frame(15).text, /^● busy {2}cpu 62%$/m, "the status line is above the charts, so it reads without scrolling");
+  assert.match(frame(15).text, /^load 5\.4x/m);
   assert.match(frame(15, 9999).text, /╰─ 1h ─+ peak \d+% ─╯/, "the bottom of a scrolled pane still lands on a box edge");
   // Only a pane too narrow for a box falls back to the cards view.
   assert.equal(chartsFrame([live], { columns: 29, now: NOW }), null);
